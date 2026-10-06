@@ -377,6 +377,18 @@ fn structure_is_enforced() {
         wg(&WG_CONF.replace("PublicKey", "# PublicKey")),
         "[Peer] has no PublicKey",
     );
+    let no_private_key = WG_CONF.replace(
+        "PrivateKey = cGxhY2Vob2xkZXJwbGFjZWhvbGRlcnBsYWNlaG9sZGU=\n",
+        "",
+    );
+    assert_err(wg(&no_private_key), "[Interface] has no PrivateKey");
+    assert_err(
+        wg(&WG_CONF.replace(
+            "PrivateKey = cGxhY2Vob2xkZXJwbGFjZWhvbGRlcnBsYWNlaG9sZGU=",
+            "PrivateKey =",
+        )),
+        "[Interface] has no PrivateKey",
+    );
 }
 
 #[test]

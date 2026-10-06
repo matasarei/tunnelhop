@@ -35,6 +35,7 @@ pub fn sanitize(file: &str, text: &str) -> Result<SanitizedConfig, Vec<ImportErr
     let mut errors = Vec::new();
     let mut section = Section::None;
     let mut interfaces = 0;
+    let mut has_private_key = false;
     let mut peers: Vec<Peer> = Vec::new();
 
     for (index, raw) in text.lines().enumerate() {
@@ -94,7 +95,11 @@ pub fn sanitize(file: &str, text: &str) -> Result<SanitizedConfig, Vec<ImportErr
                     _ => {}
                 }
             }
-            Section::Interface => {}
+            Section::Interface => {
+                if lower == "privatekey" && !value.is_empty() {
+                    has_private_key = true;
+                }
+            }
         }
     }
 
@@ -103,6 +108,8 @@ pub fn sanitize(file: &str, text: &str) -> Result<SanitizedConfig, Vec<ImportErr
             file,
             "must have exactly one [Interface] section",
         ));
+    } else if !has_private_key {
+        errors.push(ImportError::in_file(file, "[Interface] has no PrivateKey"));
     }
     if peers.is_empty() {
         errors.push(ImportError::in_file(file, "must have at least one [Peer]"));
