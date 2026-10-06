@@ -121,6 +121,35 @@ fn traversal_and_absolute_names_are_refused() {
 }
 
 #[test]
+fn names_windows_would_alter_or_map_to_a_device_are_refused() {
+    for name in [
+        "openvpn/one.ovpn.",
+        "openvpn/one.ovpn ",
+        "openvpn/nul.ovpn",
+        "openvpn/CON",
+        "openvpn/com1.txt",
+        "openvpn/LPT9 .ovpn",
+        "openvpn/aux./x.ovpn",
+        "openvpn/a?.ovpn",
+        "openvpn/a\u{1}.ovpn",
+    ] {
+        let bytes = valid_bundle(vec![Entry::File(name, b"x".to_vec())]);
+        let (errors, _tmp) = import_err(&bytes);
+        assert!(
+            errors.contains(&format!("{name}: name is not a valid Windows file name")),
+            "{name:?} should be refused, got {errors:?}"
+        );
+    }
+    // Look-alikes that are fine on Windows.
+    let bytes = valid_bundle(vec![
+        Entry::File("openvpn/console.ovpn", b"x".to_vec()),
+        Entry::File("openvpn/com10.txt", b"x".to_vec()),
+        Entry::File("openvpn/.hidden", b"x".to_vec()),
+    ]);
+    bundle::import(&bytes, tempfile::tempdir().unwrap().path()).unwrap();
+}
+
+#[test]
 fn entries_outside_the_allowed_tree_are_refused() {
     let bytes = valid_bundle(vec![Entry::File("scripts/run.bat", b"x".to_vec())]);
     assert_refused(

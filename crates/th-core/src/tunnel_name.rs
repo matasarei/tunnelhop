@@ -25,20 +25,28 @@ pub fn is_ours(name: &str) -> bool {
 /// WireGuard for Windows' rule: `^[a-zA-Z0-9_=+.-]{1,32}$`, no reserved DOS device name
 /// before the first dot, and no leading or trailing dot.
 pub fn is_valid_wireguard_name(name: &str) -> bool {
-    const RESERVED: &[&str] = &["con", "prn", "aux", "nul"];
     let charset_ok = !name.is_empty()
         && name.len() <= 32
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"_=+.-".contains(&b));
-    if !charset_ok || name.starts_with('.') || name.ends_with('.') {
-        return false;
-    }
-    let stem = name.split('.').next().unwrap_or("").to_ascii_lowercase();
-    let numbered_device = (stem.starts_with("com") || stem.starts_with("lpt"))
+    charset_ok && !name.starts_with('.') && !name.ends_with('.') && !is_dos_device_name(name)
+}
+
+/// Whether Windows treats a file name as a device (`CON`, `NUL`, `COM1`, `lpt9.txt`, …): the
+/// part before the first dot, ignoring case and trailing spaces, is a reserved device name.
+pub(crate) fn is_dos_device_name(name: &str) -> bool {
+    const RESERVED: &[&str] = &["con", "prn", "aux", "nul"];
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
+    let numbered = (stem.starts_with("com") || stem.starts_with("lpt"))
         && stem.len() == 4
         && matches!(stem.as_bytes()[3], b'1'..=b'9');
-    !RESERVED.contains(&stem.as_str()) && !numbered_device
+    RESERVED.contains(&stem.as_str()) || numbered
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ use sha2::{Digest, Sha256};
 
 use crate::manifest::{self, Manifest};
 use crate::sanitize::{self, Credentials, Endpoint};
+use crate::tunnel_name::is_dos_device_name;
 
 pub const MAX_ZIP_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 500;
@@ -291,6 +292,15 @@ fn check_entry_name(name: &str) -> Result<(), &'static str> {
         .any(|s| s.is_empty() || *s == "." || *s == "..")
     {
         return Err("name must not be absolute or contain empty, '.' or '..' segments");
+    }
+    // Names Windows would silently change or map to a device: `a.ovpn.` and `a.ovpn ` both
+    // become `a.ovpn`, and `nul.ovpn` is the null device.
+    if segments.iter().any(|s| {
+        s.ends_with(['.', ' '])
+            || s.bytes().any(|b| b < 0x20 || b"<>\"|?*".contains(&b))
+            || is_dos_device_name(s)
+    }) {
+        return Err("name is not a valid Windows file name");
     }
     match segments.as_slice() {
         [MANIFEST_FILE] if !name.ends_with('/') => Ok(()),
