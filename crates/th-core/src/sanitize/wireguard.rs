@@ -138,6 +138,7 @@ pub fn sanitize(file: &str, text: &str) -> Result<SanitizedConfig, Vec<ImportErr
             text: text.to_string(),
             endpoints,
             credentials: None,
+            asks_credentials: false,
         })
     } else {
         Err(errors)

@@ -172,6 +172,12 @@ own directory. At import its two lines (username, password) are moved into a DPA
 plaintext file is deleted, and the directive is rewritten to bare `auth-user-pass`; credentials
 are then supplied over the management interface.
 
+A bare `auth-user-pass` (no file), as ProtonVPN ships its configs, is accepted. The import reports
+the profile as needing credentials; the UI asks once for a username and password, which apply
+to every such profile in the bundle unless set per profile, and the service stores them as a
+DPAPI secret. Until then the profile is never picked for rotation, and connecting to it by name
+is refused with "needs credentials".
+
 Each config must contain at least one `remote`.
 
 **WireGuard** — `[Interface]` and `[Peer]` sections only. `PreUp`, `PostUp`, `PreDown`,
@@ -280,7 +286,9 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
 
 - **Window:** closing it hides it to the tray.
 - **Dashboard:** bundle, profile, protocol, public IP, state, kill-switch state; bundle import
-  by drag-and-drop or file picker, with the list of import errors.
+  by drag-and-drop or file picker, with the list of import errors. After an import that left
+  OpenVPN profiles without credentials, a prompt asks for them; the profile list marks any
+  profile still waiting, with an action to set them.
 - **Tray menu:**
   - Status: `Connected: <profile> (<IP>)`, `Blocked`, or `Disconnected`
   - Rotate Now

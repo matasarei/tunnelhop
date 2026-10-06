@@ -102,6 +102,10 @@ pub struct ImportedBundle {
     /// OpenVPN credentials per profile id, taken out of the archive for the caller to store
     /// securely. Empty when `already_present`: they were handed over on the first import.
     pub credentials: BTreeMap<String, Credentials>,
+    /// OpenVPN profiles whose runtime will ask for credentials that this import did not supply,
+    /// in manifest order. The caller subtracts what it already has stored; on a repeated
+    /// import that includes profiles whose credentials came from the first one.
+    pub needs_credentials: Vec<String>,
     /// The same zip was imported before; nothing was written this time.
     pub already_present: bool,
 }
@@ -128,6 +132,7 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
             manifest,
             endpoints: prepared.endpoints,
             credentials: BTreeMap::new(),
+            needs_credentials: prepared.needs_credentials,
             already_present: true,
         });
     }
@@ -156,6 +161,7 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
         manifest,
         endpoints: prepared.endpoints,
         credentials: prepared.credentials,
+        needs_credentials: prepared.needs_credentials,
         already_present: false,
     })
 }
@@ -316,6 +322,7 @@ struct Prepared {
     files: BTreeMap<String, Vec<u8>>,
     endpoints: BTreeMap<String, Vec<Endpoint>>,
     credentials: BTreeMap<String, Credentials>,
+    needs_credentials: Vec<String>,
 }
 
 /// Sanitize every profile's config; `read` returns a bundle file by its path.
@@ -328,6 +335,7 @@ fn prepare_profiles(
         files: BTreeMap::new(),
         endpoints: BTreeMap::new(),
         credentials: BTreeMap::new(),
+        needs_credentials: Vec::new(),
     };
     for (i, profile) in manifest.profiles.iter().enumerate() {
         let Some(content) = read(&profile.file) else {
@@ -348,8 +356,14 @@ fn prepare_profiles(
                 prepared
                     .endpoints
                     .insert(profile.id.clone(), config.endpoints);
-                if let Some(credentials) = config.credentials {
-                    prepared.credentials.insert(profile.id.clone(), credentials);
+                match config.credentials {
+                    Some(credentials) => {
+                        prepared.credentials.insert(profile.id.clone(), credentials);
+                    }
+                    None if config.asks_credentials => {
+                        prepared.needs_credentials.push(profile.id.clone());
+                    }
+                    None => {}
                 }
             }
             Err(found) => errors.extend(found),

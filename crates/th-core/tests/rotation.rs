@@ -466,3 +466,37 @@ async fn adopt_restores_state_found_at_startup() {
     rig.rotator.adopt(None, false, rig.now);
     assert_eq!(rig.rotator.status().state, State::Disconnected);
 }
+
+#[tokio::test]
+async fn profiles_missing_credentials_are_never_picked() {
+    let mut rig = Rig::new(manifest(&["wg-a", "ovpn-b", "ovpn-c"], "reconnect_random"));
+    rig.rotator
+        .set_missing_credentials(["ovpn-b".to_string(), "ovpn-c".to_string()].into());
+
+    for _ in 0..10 {
+        let status = rig.rotate().await.unwrap();
+        assert_eq!(status.profile_id.as_deref(), Some("wg-a"));
+    }
+    assert!(!rig.log.take().iter().any(|e| e.contains("ovpn-")));
+
+    let error = rig.rotator.connect_to("ovpn-b", rig.now).await.unwrap_err();
+    assert_eq!(
+        error,
+        RotationError::NoCandidates("profile \"ovpn-b\" needs credentials".into())
+    );
+
+    // Once the credentials are set, the profile is usable again.
+    rig.rotator.set_missing_credentials(Default::default());
+    let status = rig.rotator.connect_to("ovpn-b", rig.now).await.unwrap();
+    assert_eq!(status.profile_id.as_deref(), Some("ovpn-b"));
+}
+
+#[tokio::test]
+async fn a_bundle_where_every_profile_lacks_credentials_has_no_candidates() {
+    let mut rig = Rig::new(manifest(&["ovpn-a"], "reconnect_random"));
+    rig.rotator
+        .set_missing_credentials(["ovpn-a".to_string()].into());
+    let error = rig.rotate().await.unwrap_err();
+    assert!(matches!(error, RotationError::NoCandidates(_)), "{error:?}");
+    assert!(rig.log.take().is_empty(), "nothing may be touched");
+}

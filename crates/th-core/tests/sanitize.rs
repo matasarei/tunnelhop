@@ -504,3 +504,63 @@ fn import_refuses_a_hostile_config_and_leaves_nothing() {
     );
     assert!(std::fs::read_dir(tmp.path()).unwrap().next().is_none());
 }
+
+// ---- Credentials the config asks for -------------------------------------------------------
+
+#[test]
+fn asks_credentials_reflects_auth_user_pass_in_either_form() {
+    let bare = ovpn(&format!("{BASE}auth-user-pass\n")).unwrap();
+    assert!(bare.asks_credentials);
+    assert!(bare.credentials.is_none());
+
+    let with_file = ovpn(&format!("{BASE}auth-user-pass auth.txt\n")).unwrap();
+    assert!(with_file.asks_credentials);
+    assert!(with_file.credentials.is_some());
+
+    assert!(
+        !ovpn(BASE).unwrap().asks_credentials,
+        "certificate-only configs ask nothing"
+    );
+    assert!(!wg(WG_CONF).unwrap().asks_credentials);
+}
+
+#[test]
+fn import_lists_openvpn_profiles_still_needing_credentials() {
+    let bundle_with = |ovpn_text: String, extra: Vec<Entry<'static>>| {
+        let mut entries = vec![
+            Entry::File("manifest.json", MANIFEST.as_bytes().to_vec()),
+            Entry::File("wireguard/one.conf", WG_CONF.as_bytes().to_vec()),
+            Entry::File("openvpn/one.ovpn", ovpn_text.into_bytes()),
+        ];
+        entries.extend(extra);
+        zip(&entries)
+    };
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Proton's shape: a bare auth-user-pass and no file.
+    let bare = bundle::import(
+        &bundle_with(format!("{BASE}auth-user-pass\n"), vec![]),
+        tmp.path(),
+    )
+    .unwrap();
+    assert_eq!(bare.needs_credentials, ["ovpn-1"]);
+    assert!(bare.credentials.is_empty());
+
+    // Credentials shipped in the bundle: nothing to ask.
+    let shipped = bundle_with(
+        format!("{BASE}auth-user-pass auth.txt\n"),
+        vec![Entry::File("openvpn/auth.txt", b"bob\nhunter2\n".to_vec())],
+    );
+    let first = bundle::import(&shipped, tmp.path()).unwrap();
+    assert!(first.needs_credentials.is_empty());
+
+    // On a repeated import the credentials are not handed over again, so the profile is
+    // listed; the service subtracts what it stored the first time.
+    let again = bundle::import(&shipped, tmp.path()).unwrap();
+    assert!(again.already_present);
+    assert_eq!(again.needs_credentials, ["ovpn-1"]);
+
+    // No auth-user-pass at all: nothing needed.
+    let none = bundle::import(&bundle_with(BASE.to_string(), vec![]), tmp.path()).unwrap();
+    assert!(none.needs_credentials.is_empty());
+}
