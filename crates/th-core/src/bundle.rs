@@ -9,6 +9,7 @@ use std::fmt;
 use std::fs;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
@@ -23,6 +24,7 @@ pub const MAX_COMPRESSION_RATIO: u64 = 100;
 
 const MANIFEST_FILE: &str = "manifest.json";
 const STAGING_PREFIX: &str = ".staging-";
+const STALE_STAGING_AGE: Duration = Duration::from_secs(60 * 60);
 
 /// First 16 hex characters of the SHA-256 of the zip bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -367,6 +369,7 @@ fn install(
     files: &BTreeMap<String, Vec<u8>>,
 ) -> std::io::Result<()> {
     fs::create_dir_all(root)?;
+    remove_stale_staging(root);
     let mut suffix = [0u8; 8];
     rand::fill(&mut suffix);
     let suffix: String = suffix.iter().map(|b| format!("{b:02x}")).collect();
@@ -383,6 +386,29 @@ fn install(
         let _ = fs::remove_dir_all(&staging);
     }
     result
+}
+
+/// Remove staging directories a crashed import left behind. Only old ones: a recent one may
+/// belong to an import still running.
+fn remove_stale_staging(root: &Path) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let is_staging = entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(STAGING_PREFIX));
+        let is_stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= STALE_STAGING_AGE);
+        if is_staging && is_stale {
+            let _ = fs::remove_dir_all(entry.path());
+        }
+    }
 }
 
 fn write_tree(

@@ -247,3 +247,65 @@ fn profile_file_missing_from_the_archive_is_refused() {
     ]);
     assert_refused(&bytes, "\"wireguard/one.conf\" is not in the archive");
 }
+
+#[test]
+fn a_failed_install_leaves_no_staging_behind() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("bundles");
+    let bytes = valid_bundle(vec![]);
+    // A plain file where the bundle directory goes: everything stages, then the rename fails.
+    fs::create_dir_all(&root).unwrap();
+    let target = root.join(BundleId::of(&bytes).as_str());
+    fs::write(&target, b"in the way").unwrap();
+
+    let errors = bundle::import(&bytes, &root).unwrap_err();
+
+    assert!(
+        errors[0]
+            .to_string()
+            .starts_with("could not write the bundle"),
+        "{errors:?}"
+    );
+    let names: Vec<_> = fs::read_dir(&root)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        names,
+        vec![target.file_name().unwrap().to_owned()],
+        "staging must be removed"
+    );
+}
+
+#[test]
+fn a_recent_staging_directory_is_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let in_progress = tmp.path().join(".staging-0000000000000000");
+    fs::create_dir_all(&in_progress).unwrap();
+
+    bundle::import(&valid_bundle(vec![]), tmp.path()).unwrap();
+
+    assert!(
+        in_progress.is_dir(),
+        "it may belong to an import still running"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stale_staging_directory_is_swept() {
+    use std::time::{Duration, SystemTime};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let stale = tmp.path().join(".staging-1111111111111111");
+    fs::create_dir_all(&stale).unwrap();
+    let two_hours_ago = SystemTime::now() - Duration::from_secs(2 * 60 * 60);
+    fs::File::open(&stale)
+        .unwrap()
+        .set_modified(two_hours_ago)
+        .unwrap();
+
+    bundle::import(&valid_bundle(vec![]), tmp.path()).unwrap();
+
+    assert!(!stale.exists());
+}
