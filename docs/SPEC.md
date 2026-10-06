@@ -1,201 +1,306 @@
-# Technical Specification: Desktop VPN Orchestrator Client
+# TunnelHop — Technical Specification
 
-## 1. Executive Summary
+## 1. Summary
 
-A lightweight desktop application acting as a high-level manager and automation orchestrator for **WireGuard** and **OpenVPN**. Target platform is **Windows 10/11** as primary, designed with an abstraction layer for future **macOS** and **Linux** support.
+TunnelHop is a desktop manager and rotation orchestrator for **WireGuard** and **OpenVPN** on
+**Windows 10/11**. It does not implement tunnels itself: it drives the installed native runtimes
+(`wireguard.exe`, `openvpn.exe`) and adds what they lack — importing a bundle of profiles,
+rotating between them on a schedule, and keeping traffic blocked by its own kill-switch while
+it switches.
 
-The application does not implement low-level cryptographic tunnel drivers in-process. Instead, it delegates all tunnel lifecycles to installed native VPN runtimes via their official **Command-Line Interfaces (CLI)** and management sockets. Configuration is distributed and imported via a single `.zip` archive containing native configuration files and an orchestration manifest.
+Configuration arrives as a single `.zip` bundle holding native configs and a manifest. Every
+bundle is treated as **untrusted input**.
 
----
+Supported runtimes: **WireGuard for Windows ≥ 0.5.3**, **OpenVPN ≥ 2.6.0**. Older versions are
+reported in the UI and that protocol is disabled.
 
-## 2. Architecture & Design Principles
-
-### 2.1 Technology Stack Recommendations
-
-* **Framework:** Tauri v2 (Rust backend + Svelte / Vue / Vanilla TypeScript frontend) or Go with Wails.
-* **Storage:** Local file system (`%LocalAppData%\VpnOrchestrator\` on Windows).
-* **Communication:** IPC between UI and backend; TCP socket for OpenVPN management; CLI/Service API for WireGuard.
-
-### 2.2 Architectural Layers
-
-```
-┌────────────────────────────────────────────────────────┐
-│ UI Layer (Frontend: WebView / System Tray)             │
-│ - Dashboard: active profile, public IP, ping, status   │
-│ - Tray context menu: quick switch, pause, rotate now   │
-│ - Bundle import: drag-and-drop .zip ingestion          │
-└──────────────────────────┬─────────────────────────────┘
-                           │ IPC Commands
-┌──────────────────────────▼─────────────────────────────┐
-│ Application Core (Rust / Go Orchestrator)              │
-│ - Manifest parser & profile store                      │
-│ - Rotation scheduler & randomizer engine               │
-│ - IP & connectivity verifier                           │
-└──────────────────────────┬─────────────────────────────┘
-                           │ VpnDriver Abstraction (Trait / Interface)
-          ┌────────────────┴────────────────┐
-          ▼                                 ▼
-┌──────────────────┐              ┌──────────────────┐
-│ WireguardDriver  │              │  OpenvpnDriver   │
-│ (CLI / Services) │              │ (CLI + Mgmt TCP) │
-└──────────────────┘              └──────────────────┘
-
-```
+macOS and Linux are out of scope for v1. The core crate has no platform code, so a later port
+replaces the service and drivers, not the logic.
 
 ---
 
-## 3. Configuration Bundle Structure
+## 2. Architecture
 
-Configurations are delivered via a single `.zip` archive holding native configs and a central manifest.
+### 2.1 Stack
 
-### 3.1 Directory Layout Inside Archive
+| Part | Choice |
+|---|---|
+| Core logic | Rust crate `th-core` — manifest, bundle import, config sanitizers, rotation engine, IPC types. Platform-independent. |
+| Privileged service | Rust binary `th-service.exe`, a Windows service running as LocalSystem. |
+| UI | Tauri v2 + Svelte 5, running **unelevated** as the logged-in user. |
+| IPC | Named pipe `\\.\pipe\tunnelhop`, JSON lines, versioned protocol. |
+| Installer | Tauri NSIS bundle with hooks that install and remove the service. |
+
+### 2.2 Processes
+
+```
+┌────────────────────────────────────────┐
+│ tunnelhop.exe  (user, unelevated)      │
+│  Tray menu · Dashboard · Bundle import │
+└──────────────────┬─────────────────────┘
+                   │ \\.\pipe\tunnelhop  (SDDL: SYSTEM, Administrators, Interactive users)
+┌──────────────────▼─────────────────────┐
+│ th-service.exe  (LocalSystem)          │
+│  Bundle store · Rotation engine        │
+│  Kill-switch (WFP) · IP probe          │
+│  ┌───────────────┐ ┌────────────────┐  │
+│  │WireguardDriver│ │ OpenvpnDriver  │  │
+│  └──────┬────────┘ └───────┬────────┘  │
+└─────────┼──────────────────┼───────────┘
+          ▼                  ▼
+  WireGuardTunnel$th-…   openvpn.exe (Job Object child,
+  (SCM service)          authenticated management socket)
+```
+
+- The UI never elevates and never needs to. All privileged work happens in the service.
+- The UI sends bundle **bytes** over the pipe (≤ 20 MB). The service never opens a path chosen
+  by the user, so a SYSTEM process cannot be tricked into reading a file the user cannot.
+- The service owns every tunnel. A UI crash changes nothing; a service crash leaves the
+  kill-switch in place (fail closed) and the next start reconciles.
+
+### 2.3 Storage
+
+| Path | Contents | Access |
+|---|---|---|
+| `%ProgramData%\TunnelHop\bundles\<bundle_id>\` | Extracted, sanitized bundle | SYSTEM, Administrators |
+| `%ProgramData%\TunnelHop\tunnels\` | WireGuard configs under generated tunnel names | SYSTEM, Administrators |
+| `%ProgramData%\TunnelHop\secrets\` | DPAPI blobs (OpenVPN credentials), short-lived management passwords | SYSTEM |
+| `%ProgramData%\TunnelHop\settings.json` | Active bundle, selected profile, user overrides | SYSTEM, Administrators |
+| `%ProgramData%\TunnelHop\logs\` | Service logs | SYSTEM, Administrators |
+| `%LocalAppData%\TunnelHop\` | UI-only preferences (window, theme) | user |
+
+---
+
+## 3. Configuration bundle
+
+### 3.1 Layout
 
 ```text
-vpn_bundle.zip
-├── manifest.json            # Orchestrator settings and profile catalog
+bundle.zip
+├── manifest.json
 ├── wireguard/
-│   ├── ua-kyiv-01.conf     # Standard WireGuard config
-│   ├── ua-kyiv-02.conf
-│   └── ...
+│   ├── ua-kyiv-01.conf
+│   └── ua-kyiv-02.conf
 └── openvpn/
-    ├── ua-kyiv-01.ovpn     # Standard OpenVPN config
-    ├── ua-kyiv-02.ovpn
-    └── auth.txt            # Optional credentials referenced by .ovpn
-
+    ├── ua-kyiv-01.ovpn
+    └── auth.txt          # optional, referenced by `auth-user-pass auth.txt`
 ```
 
-### 3.2 Manifest Schema (`manifest.json`)
+Only `manifest.json`, `wireguard/**` and `openvpn/**` are accepted.
+
+### 3.2 Manifest
+
+Schema: [`manifest.schema.json`](manifest.schema.json).
 
 ```json
 {
-  "version": "1.0",
+  "schema_version": "1",
   "bundle_name": "Ukraine Server Cluster",
-  "default_protocol": "wireguard",
+  "protocols": ["wireguard", "openvpn"],
   "rotation": {
     "enabled": true,
     "strategy": "random",
     "interval_minutes": 15,
     "on_disconnect": "reconnect_random",
-    "cooldown_seconds": 2
+    "reconnect_grace_seconds": 20
   },
   "profiles": [
-    {
-      "id": "ua-wg-01",
-      "name": "Kyiv #1 (WG)",
-      "protocol": "wireguard",
-      "file": "wireguard/ua-kyiv-01.conf"
-    },
-    {
-      "id": "ua-wg-02",
-      "name": "Kyiv #2 (WG)",
-      "protocol": "wireguard",
-      "file": "wireguard/ua-kyiv-02.conf"
-    },
-    {
-      "id": "ua-ovpn-01",
-      "name": "Kyiv #1 (OpenVPN)",
-      "protocol": "openvpn",
-      "file": "openvpn/ua-kyiv-01.ovpn"
-    }
+    { "id": "ua-wg-01",   "name": "Kyiv #1 (WG)",      "protocol": "wireguard", "file": "wireguard/ua-kyiv-01.conf" },
+    { "id": "ua-wg-02",   "name": "Kyiv #2 (WG)",      "protocol": "wireguard", "file": "wireguard/ua-kyiv-02.conf" },
+    { "id": "ua-ovpn-01", "name": "Kyiv #1 (OpenVPN)", "protocol": "openvpn",   "file": "openvpn/ua-kyiv-01.ovpn" }
   ]
 }
-
 ```
+
+| Field | Rule |
+|---|---|
+| `schema_version` | Must be `"1"`. |
+| `bundle_name` | 1–100 characters. |
+| `protocols` | Optional; the protocols rotation may pick from. Default: every protocol a profile uses. Must not be empty. |
+| `rotation` | Optional; every field has a default. |
+| `rotation.enabled` | Default `true`. |
+| `rotation.strategy` | `"random"` (the only value in v1). |
+| `rotation.interval_minutes` | 1–1440, default 15. |
+| `rotation.on_disconnect` | `"reconnect_same"`, `"reconnect_random"` (default) or `"stay_down"`. |
+| `rotation.reconnect_grace_seconds` | 5–300, default 20. How long a tunnel may stay in a reconnecting state before it counts as down. |
+| `profiles` | 1–500 entries. |
+| `profiles[].id` | `^[a-z0-9-]{1,40}$`, unique within the bundle. |
+| `profiles[].name` | 1–100 characters. |
+| `profiles[].protocol` | `"wireguard"` or `"openvpn"`. |
+| `profiles[].file` | Relative path, `/`-separated, under `wireguard/` for WireGuard and `openvpn/` for OpenVPN; must exist in the archive. |
+
+Unknown fields anywhere are an error. `bundle_id` is not part of the manifest: it is the first
+16 hex characters of the SHA-256 of the zip bytes.
+
+### 3.3 Import
+
+1. **Archive limits.** ≤ 20 MB compressed, ≤ 500 entries, ≤ 50 MB uncompressed, each entry's
+   compression ratio ≤ 100.
+2. **Entry names.** Rejected: absolute paths, drive letters, `..` segments, backslashes,
+   empty segments, symlinks, names outside the allowed top-level entries, and names that
+   collide after case-folding (Windows file systems are case-insensitive).
+3. **Staging.** Extract to `bundles\.staging-<random>\`, validate and sanitize everything, then
+   rename to `bundles\<bundle_id>\`. On any error the staging directory is deleted and the user
+   sees every error found, each with its file and line.
+4. **Re-import** of the same zip is a no-op that returns the existing `bundle_id`.
+
+### 3.4 Config sanitizing
+
+Configs run with LocalSystem privileges, so anything in them that can execute code or touch
+files is refused.
+
+**OpenVPN** — an allowlist. A directive not on it is an error with its line number. The
+tokenizer follows OpenVPN's own quoting and backslash rules, so `"up" "cmd"` is recognised as
+`up`.
+
+Allowed: `client`, `dev`, `dev-type`, `proto`, `remote`, `remote-random`, `resolv-retry`,
+`nobind`, `persist-key`, `persist-tun`, `remote-cert-tls`, `cipher`, `data-ciphers`,
+`data-ciphers-fallback`, `auth`, `tls-version-min`, `tls-cipher`, `tls-ciphersuites`, `tls-auth`
+(inline only), `tls-crypt` (inline only), `tls-crypt-v2` (inline only), `key-direction`, `verb`,
+`mute`, `auth-user-pass`, `auth-nocache`, `allow-compression`, `comp-lzo` (only `no`),
+`pull-filter`, `redirect-gateway`, `block-ipv6`, `ping`, `ping-restart`, `connect-retry`,
+`connect-retry-max`, `server-poll-timeout`, `float`, `mssfix`, `tun-mtu`, `fragment`, `sndbuf`,
+`rcvbuf`, `verify-x509-name`, `explicit-exit-notify`, `port`, `lport`, `windows-driver`,
+`setenv opt block-outside-dns` (that exact form only), `block-outside-dns`.
+
+Inline blocks allowed: `<ca>`, `<cert>`, `<key>`, `<tls-auth>`, `<tls-crypt>`, `<tls-crypt-v2>`.
+Any other inline block is an error.
+
+`auth-user-pass <file>` must name a file inside the bundle, resolved relative to the config's
+own directory. At import its two lines (username, password) are moved into a DPAPI secret, the
+plaintext file is deleted, and the directive is rewritten to bare `auth-user-pass`; credentials
+are then supplied over the management interface.
+
+Each config must contain at least one `remote`.
+
+**WireGuard** — `[Interface]` and `[Peer]` sections only. `PreUp`, `PostUp`, `PreDown`,
+`PostDown` and `Table` are errors. Each `[Peer]` needs an `Endpoint`.
+
+**Endpoints** of every profile (`Endpoint` for WireGuard; `remote host [port] [proto]` for
+OpenVPN, with `port` and `proto` defaults applied) are extracted at import for the kill-switch.
 
 ---
 
-## 4. Functional Specifications
+## 4. Behaviour
 
-### 4.1 Bundle Ingestion
-
-1. Accept `.zip` archive via drag-and-drop or file picker.
-2. Unpack contents into `%LocalAppData%\VpnOrchestrator\bundles\<bundle_id>\`.
-3. Validate `manifest.json` against schema.
-4. Verify that each file path listed in `profiles` exists on disk.
-5. Store parsed state in application memory and persist current selection in settings.
-
-### 4.2 Driver Abstraction Layer (`VpnDriver`)
-
-All platform-specific actions must be implemented behind a unified interface:
+### 4.1 Driver interface
 
 ```rust
+#[async_trait]
 pub trait VpnDriver: Send + Sync {
-    fn connect(&self, profile_path: &Path) -> Result<(), DriverError>;
-    fn disconnect(&self, profile_name: &str) -> Result<(), DriverError>;
-    fn status(&self) -> Result<TunnelStatus, DriverError>;
+    async fn connect(&self, profile: &ResolvedProfile) -> Result<TunnelHandle, DriverError>;
+    /// Returns only after teardown is confirmed.
+    async fn disconnect(&self, handle: &TunnelHandle) -> Result<(), DriverError>;
+    async fn status(&self, handle: &TunnelHandle) -> Result<TunnelStatus, DriverError>;
+    fn events(&self) -> broadcast::Receiver<TunnelEvent>;
+    /// Find tunnels left by a previous run of the service.
+    async fn reconcile(&self) -> Result<Vec<TunnelHandle>, DriverError>;
 }
-
 ```
 
-#### WireGuard Windows Implementation:
+`ResolvedProfile` carries the absolute config path, the generated tunnel name and the
+endpoints resolved to IP addresses.
 
-* **Connect:**
-```cmd
-wireguard.exe /installtunnelservice "<Absolute_Path>\profile.conf"
+### 4.2 WireGuard driver
 
-```
+- `wireguard.exe` is found under `%ProgramFiles%\WireGuard\`; its version comes from the file's
+  version resource.
+- **Tunnel name:** `th-` followed by the first 12 hex characters of
+  SHA-256(`bundle_id` + `/` + `profile_id`). WireGuard derives the service name from the file
+  name and requires `^[a-zA-Z0-9_=+.-]{1,32}$`; a generated name also keeps two bundles that both
+  ship `ua-kyiv-01.conf` from colliding. The config is copied to `tunnels\<name>.conf` with
+  `Endpoint` rewritten to the resolved IP.
+- **Connect:** `wireguard.exe /installtunnelservice <absolute path>`, then poll the service
+  `WireGuardTunnel$<name>` until `SERVICE_RUNNING` (15 s timeout).
+- **Disconnect:** `wireguard.exe /uninstalltunnelservice <name>`, then poll until the service no
+  longer exists (15 s timeout).
+- **Reconcile:** enumerate services matching `WireGuardTunnel$th-*`. Tunnels without the `th-`
+  prefix belong to the user and are never touched.
+- `HKLM\Software\WireGuard\DangerousScriptExecution` is never set.
 
+### 4.3 OpenVPN driver
 
-Poll Windows Service status `WireGuardTunnel$<TunnelName>` until status is `SERVICE_RUNNING`.
-* **Disconnect:**
-```cmd
-wireguard.exe /uninstalltunnelservice "<TunnelName>"
+- `openvpn.exe` is found via `HKLM\SOFTWARE\OpenVPN\exe_path`, falling back to
+  `%ProgramFiles%\OpenVPN\bin\`. `openvpn --version` must report ≥ 2.6.0.
+- **Connect:** spawn, suspended, inside a Job Object with `KILL_ON_JOB_CLOSE`:
 
-```
+  ```
+  openvpn.exe --config <abs> --management 127.0.0.1 <random free port> <password file>
+              --management-hold --management-query-passwords --auth-nocache
+              --connect-retry-max 3
+  ```
 
+  The password file holds 32 random bytes (hex), lives in `secrets\`, and is deleted once the
+  management client has authenticated. The client then sends `state on` and `hold release`,
+  answers `>PASSWORD:Need 'Auth'` from the stored credentials, and maps `>STATE:` lines:
+  `CONNECTED` → up, `RECONNECTING` → reconnecting, `EXITING` → down.
+- **Disconnect:** `signal SIGTERM` over management; if the process has not exited after 10 s,
+  terminate the job.
 
-Wait until the service entry is unregistered.
+### 4.4 Kill-switch
 
-#### OpenVPN Windows Implementation:
+The service keeps its own WFP provider and sublayer. All filters are persistent, so they
+survive a service crash.
 
-* **Connect:**
-Spawn `openvpn.exe` as a supervised child process:
-```cmd
-openvpn.exe --config "<Absolute_Path>\profile.ovpn" --management 127.0.0.1 7505 --management-query-passwords
+- **Engage(endpoints):** permit loopback, DHCPv4 (UDP 67/68), DHCPv6 (UDP 546/547), ICMPv6
+  neighbour discovery (types 133–137) and each VPN endpoint (IP, port, protocol); block all other
+  IPv4 and IPv6 traffic, LAN included.
+- **Allow interface(LUID):** permit traffic on a tunnel interface. **Revoke** removes it.
+- **Disengage:** remove every filter in the sublayer.
+- **On service start:** if filters exist and no tunnel is up, they stay and the state is
+  `Blocked`. The user can choose "Disconnect & unblock".
 
-```
+### 4.5 Rotation
 
+Triggered by the interval timer, by "Rotate Now", or by the current tunnel being down (or
+reconnecting longer than `reconnect_grace_seconds`) when `on_disconnect` is not `stay_down`.
 
-Connect a TCP client to `127.0.0.1:7505` to read state events (`CONNECTED`, `ASSIGN_IP`, `RECONNECTING`).
-* **Disconnect:**
-Send command `signal SIGTERM` over the management TCP connection or gracefully terminate child process.
+1. **Candidates:** profiles whose protocol is in `protocols` and whose runtime is available,
+   minus the current profile. If none are left, reconnect the current profile.
+   `reconnect_same` always picks the current profile.
+2. Pick one uniformly at random.
+3. Resolve its endpoints while the old tunnel is still up.
+4. Engage the kill-switch with the old and new endpoints; revoke the old interface; disconnect
+   the old tunnel.
+5. Connect the new tunnel; allow its interface.
+6. **Probe** the public IP: `https://api.ipify.org`, then `https://ipinfo.io/ip`, 5 s timeout
+   each. The result must parse as an IP and differ from the ISP address (recorded once, before
+   the first connection).
+7. If connect or probe fails, try another candidate — at most 3 attempts in total. After that
+   the state is `Blocked`: the kill-switch stays engaged and the UI shows an alert.
+8. Publish the new status (profile, IP, state, kill-switch) to the UI.
 
-### 4.3 Randomized Rotation Engine
-
-* **Execution Flow:**
-1. Trigger fired by timer or user action ("Rotate Now").
-2. Select candidate profile randomly from the active bundle:
-
-$$\text{Candidate} \in \text{Profiles} \setminus \{\text{CurrentActive}\}$$
-
-
-3. Invoke `disconnect()` on current active profile.
-4. Wait for `cooldown_seconds` (default: 2s) to allow OS route table flush.
-5. Invoke `connect()` with the newly selected profile.
-6. Execute an external HTTPS probe (`[https://api.ipify.org](https://api.ipify.org)` or `[https://ipinfo.io/json](https://ipinfo.io/json)`) to verify new public IP.
-7. Update UI and tray tooltip with active profile name and new external IP.
-
-
+The user's choices in the tray — auto-rotation on/off and the interval — are stored in
+`settings.json` and take precedence over the manifest's defaults.
 
 ---
 
-## 5. UI & System Tray Requirements
+## 5. UI
 
-* **Window Minimization:** Closing the window minimizes the application to the system notification area (tray).
-* **Tray Context Menu:**
-* **Status:** Displays `Connected: [Profile Name] ([IP])` or `Disconnected`.
-* **Rotate Now:** Immediately switches to a random profile.
-* **Auto-Rotation:** Toggle checkbox (Enabled/Disabled).
-* **Interval:** Submenu to select rotation period (5 min, 15 min, 30 min, 1 hour).
-* **Open Dashboard:** Restores main window.
-* **Exit:** Cleanly terminates any running tunnel before process shutdown.
-
-
+- **Window:** closing it hides it to the tray.
+- **Dashboard:** bundle, profile, protocol, public IP, state, kill-switch state; bundle import
+  by drag-and-drop or file picker, with the list of import errors.
+- **Tray menu:**
+  - Status: `Connected: <profile> (<IP>)`, `Blocked`, or `Disconnected`
+  - Rotate Now
+  - Auto-Rotation (checkbox)
+  - Interval ▸ 5 min · 15 min · 30 min · 1 hour
+  - Disconnect & unblock
+  - Open Dashboard
+  - Exit — disconnects, disengages the kill-switch, and quits the UI
+- **Autostart:** per-user `Run` key; possible because the UI is not elevated.
+- Runtimes below the minimum version are shown as "runtime too old" and their profiles are
+  disabled.
 
 ---
 
-## 6. Permissions & Security Constraints
+## 6. Lifecycle and security
 
-* **Privileges:** Network adapter configuration and service registration require Administrator rights on Windows. The app must ship with an application manifest requesting `requireAdministrator` or invoke a dedicated elevated helper process.
-* **Leak Prevention:** The client must verify that DNS configuration provided in native configs is strictly enforced by the native runtime.
-* **Clean Exit Guarantee:** Register process termination hooks (`SIGINT`, `SIGTERM`, `ExitProcess`) to ensure `/uninstalltunnelservice` or `signal SIGTERM` is executed so no orphaned routing rules remain.
+- **Service stop or system shutdown** (`SERVICE_CONTROL_STOP`, `SERVICE_CONTROL_PRESHUTDOWN`):
+  disconnect, disengage, exit.
+- **Service crash:** the kill-switch stays (fail closed); the next start reconciles WireGuard
+  tunnel services and the OpenVPN job.
+- **Uninstall:** disconnect, disengage, remove the service and `%ProgramData%\TunnelHop`.
+- **Pipe access** is limited by its security descriptor; every request is validated and size
+  limited.
+- **No code from configs is ever executed** (§3.4).
