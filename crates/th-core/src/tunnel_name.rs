@@ -33,19 +33,24 @@ pub fn is_valid_wireguard_name(name: &str) -> bool {
     charset_ok && !name.starts_with('.') && !name.ends_with('.') && !is_dos_device_name(name)
 }
 
-/// Whether Windows treats a file name as a device (`CON`, `NUL`, `COM1`, `lpt9.txt`, …): the
-/// part before the first dot, ignoring case and trailing spaces, is a reserved device name.
+/// Whether Windows treats a file name as a device (`CON`, `NUL`, `CONIN$`, `COM1`, `LPT²`,
+/// `lpt9.txt`, …): the part before the first dot, ignoring case and trailing spaces, is a
+/// reserved device name. Windows also counts 0 and the superscript digits ¹ ² ³ for COM and LPT.
 pub(crate) fn is_dos_device_name(name: &str) -> bool {
-    const RESERVED: &[&str] = &["con", "prn", "aux", "nul"];
+    const RESERVED: &[&str] = &["con", "prn", "aux", "nul", "conin$", "conout$"];
     let stem = name
         .split('.')
         .next()
         .unwrap_or("")
         .trim_end_matches(' ')
         .to_ascii_lowercase();
-    let numbered = (stem.starts_with("com") || stem.starts_with("lpt"))
-        && stem.len() == 4
-        && matches!(stem.as_bytes()[3], b'1'..=b'9');
+    let numbered = ["com", "lpt"].iter().any(|prefix| {
+        let mut digit = stem.strip_prefix(prefix).unwrap_or("").chars();
+        matches!(
+            (digit.next(), digit.next()),
+            (Some('0'..='9' | '¹' | '²' | '³'), None)
+        )
+    });
     RESERVED.contains(&stem.as_str()) || numbered
 }
 
@@ -96,6 +101,19 @@ mod tests {
             assert!(!is_valid_wireguard_name(bad), "{bad}");
         }
         assert!(is_valid_wireguard_name("com10"));
+        for device in [
+            "CONIN$",
+            "conout$.txt",
+            "COM\u{b9}",
+            "lpt\u{b3}.ovpn",
+            "COM0",
+            "Aux .x",
+        ] {
+            assert!(is_dos_device_name(device), "{device}");
+        }
+        for fine in ["com10", "com", "lpt\u{b9}0", "conin", "console"] {
+            assert!(!is_dos_device_name(fine), "{fine}");
+        }
         assert!(!is_ours("wg0"), "user tunnels are never ours");
     }
 
