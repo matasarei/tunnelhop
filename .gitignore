@@ -22,7 +22,9 @@ node_modules/
 *.ovpn
 *.conf
 !docs/**/*.conf
-!crates/**/tests/fixtures/**
 test-infra/data/
 auth.txt
 *.zip
+
+# Test fixtures are fake VPN material and must stay tracked (keep this last).
+!crates/**/tests/fixtures/**
