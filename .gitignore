@@ -1,0 +1,27 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Node / Tauri frontend
+node_modules/
+/app/dist/
+/app/src-tauri/target/
+/app/src-tauri/gen/
+
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Local planning notes
+.tasks/
+.gku/
+
+# Never commit VPN material used for local testing
+*.ovpn
+*.conf
+!docs/**/*.conf
+test-infra/data/
+auth.txt
+*.zip
