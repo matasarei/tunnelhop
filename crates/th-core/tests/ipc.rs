@@ -302,10 +302,7 @@ fn set_credentials_round_trips_and_validates() {
             set_credentials(vec![], "u", "nul\0"),
             "password must not contain line breaks or NUL",
         ),
-        (
-            set_credentials(vec![""], "u", "p"),
-            "profile id is out of range",
-        ),
+        (set_credentials(vec![""], "u", "p"), "profile id must match"),
     ] {
         let error = request.validate().unwrap_err().to_string();
         assert!(error.contains(needle), "{error}");
@@ -315,6 +312,27 @@ fn set_credentials_round_trips_and_validates() {
         *bundle_id = "../../etc".into();
     }
     assert!(bad_bundle.validate().is_err());
+}
+
+#[test]
+fn profile_ids_follow_the_manifest_rule() {
+    for bad in ["../../x", "UA-WG-01", "a/b", "a\\b", "a.b", ""] {
+        let connect = Request::Connect {
+            profile_id: Some(bad.into()),
+        };
+        assert!(connect.validate().is_err(), "connect {bad:?}");
+        assert!(
+            set_credentials(vec![bad], "u", "p").validate().is_err(),
+            "set_credentials {bad:?}"
+        );
+    }
+    assert!(
+        Request::Connect {
+            profile_id: Some("ua-wg-01".into())
+        }
+        .validate()
+        .is_ok()
+    );
 }
 
 #[test]
