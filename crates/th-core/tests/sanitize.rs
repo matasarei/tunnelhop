@@ -164,6 +164,28 @@ fn smuggling_through_long_lines_and_nul_is_refused() {
 }
 
 #[test]
+fn long_lines_cannot_close_an_inline_block_early() {
+    // OpenVPN reads block content in 255-byte chunks and checks each chunk for the closing
+    // tag, so here it would leave <ca> on line 2 and run `up` as a directive.
+    let config = format!(
+        "{BASE}<ca>\n{}</ca>\nscript-security 2\nup evil.bat\n<cert>\n</ca>{}</cert>\n",
+        "A".repeat(255),
+        " ".repeat(250),
+    );
+    let errors = ovpn(&config).expect_err("must be refused");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e == "openvpn/x.ovpn:5: line is longer than 255 bytes"),
+        "{errors:?}"
+    );
+    assert_err(
+        ovpn(&format!("{BASE}<ca>\nMII\0B\n</ca>\n")),
+        "x.ovpn:5: line contains a NUL byte",
+    );
+}
+
+#[test]
 fn restricted_arguments_are_enforced() {
     assert_err(
         ovpn(&format!("{BASE}setenv opt up\n")),

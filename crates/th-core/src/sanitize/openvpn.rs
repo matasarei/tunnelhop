@@ -75,14 +75,9 @@ pub fn sanitize(
         let mut emitted = line.to_string();
         let err = |message: String| ImportError::at_line(file, number, message);
 
-        if let Some((tag, _)) = &inline_until {
-            if line.trim_start().starts_with(&format!("</{tag}>")) {
-                inline_until = None;
-            }
-            output.push(emitted);
-            continue;
-        }
-
+        // Checked inside inline blocks too: OpenVPN reads block content in the same chunks and
+        // looks for the closing tag in each, so a long line could end a block for OpenVPN while
+        // this parser still treats what follows as data.
         if line.len() > MAX_LINE_BYTES {
             errors.push(err(format!("line is longer than {MAX_LINE_BYTES} bytes")));
             continue;
@@ -91,6 +86,15 @@ pub fn sanitize(
             errors.push(err("line contains a NUL byte".into()));
             continue;
         }
+
+        if let Some((tag, _)) = &inline_until {
+            if line.trim_start().starts_with(&format!("</{tag}>")) {
+                inline_until = None;
+            }
+            output.push(emitted);
+            continue;
+        }
+
         let tokens = match tokenize(line) {
             Ok(tokens) => tokens,
             Err(message) => {
