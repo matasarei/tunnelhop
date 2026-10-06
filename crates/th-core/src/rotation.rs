@@ -423,8 +423,12 @@ impl Rotator {
                     return Ok(self.settle(handle, ip, Some(false), now).await);
                 }
                 Err(AttemptError::Fatal(error)) => return Err(self.fatal(error)),
+                // No address is avoided here, so SameIp cannot occur; if it ever did, it is one
+                // more failed attempt, not a reason to take the service down.
                 Err(AttemptError::Retry(reason)) => failures.push(format!("{pick}: {reason}")),
-                Err(AttemptError::SameIp(_)) => unreachable!("no address is avoided here"),
+                Err(AttemptError::SameIp(ip)) => {
+                    failures.push(format!("{pick}: public IP {ip} did not change"))
+                }
             }
         }
 
