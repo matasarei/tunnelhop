@@ -655,3 +655,20 @@ async fn profiles_behind_a_different_entry_are_tried_first() {
     assert_eq!(status.profile_id.as_deref(), Some("wg-b"));
     assert_eq!(connects(&rig.log.take()), ["connect:wg-b"]);
 }
+
+#[tokio::test]
+async fn a_failed_teardown_does_not_keep_the_previous_ip_verdict() {
+    let mut rig = Rig::new(manifest(&["wg-a", "wg-b", "ovpn-c"], "reconnect_random"));
+    rig.rotate().await.unwrap();
+    assert_eq!(rig.rotate().await.unwrap().ip_changed, Some(true));
+    rig.driver.fail_disconnect(true);
+
+    rig.rotate().await.unwrap_err();
+
+    let status = rig.rotator.status();
+    assert_eq!(status.state, State::Blocked);
+    assert_eq!(
+        status.ip_changed, None,
+        "Blocked must not report the last rotation's result"
+    );
+}

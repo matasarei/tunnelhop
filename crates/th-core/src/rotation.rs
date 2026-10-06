@@ -519,6 +519,7 @@ impl Rotator {
                 // permitted, so nothing flows meanwhile.
                 self.current = Some(old);
                 self.state = State::Blocked;
+                self.ip_changed = None;
                 return Err(AttemptError::Fatal(RotationError::Teardown(e.to_string())));
             }
         }
