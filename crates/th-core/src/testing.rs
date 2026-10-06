@@ -165,19 +165,23 @@ impl KillSwitch for FakeKillSwitch {
     }
 }
 
-/// Answers with scripted results, then with `fallback` once the script runs out.
+/// Answers with scripted results. Once the script runs out it behaves like a VPN whose exit
+/// changes on every connection: `first_exit`, then the next address up, and so on. The
+/// sequence advances only on unscripted answers.
 pub struct FakeProbe {
     log: CallLog,
     script: Mutex<VecDeque<Result<IpAddr, String>>>,
-    fallback: IpAddr,
+    first_exit: Ipv4Addr,
+    exits_used: AtomicU64,
 }
 
 impl FakeProbe {
-    pub fn new(log: CallLog, fallback: IpAddr) -> Self {
+    pub fn new(log: CallLog, first_exit: Ipv4Addr) -> Self {
         FakeProbe {
             log,
             script: Mutex::new(VecDeque::new()),
-            fallback,
+            first_exit,
+            exits_used: AtomicU64::new(0),
         }
     }
 
@@ -185,17 +189,22 @@ impl FakeProbe {
         self.script.lock().unwrap().push_back(result);
         self
     }
+
+    /// The address the n-th unscripted answer gives (0-based).
+    pub fn exit(&self, n: u32) -> IpAddr {
+        IpAddr::V4(Ipv4Addr::from(u32::from(self.first_exit) + n))
+    }
 }
 
 #[async_trait]
 impl Probe for FakeProbe {
     async fn public_ip(&self) -> Result<IpAddr, String> {
         self.log.push("probe");
-        self.script
-            .lock()
-            .unwrap()
-            .pop_front()
-            .unwrap_or(Ok(self.fallback))
+        if let Some(scripted) = self.script.lock().unwrap().pop_front() {
+            return scripted;
+        }
+        let n = self.exits_used.fetch_add(1, Ordering::SeqCst);
+        Ok(self.exit(n as u32))
     }
 }
 

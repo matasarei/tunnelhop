@@ -8,11 +8,12 @@ use rand::rngs::StdRng;
 use serde_json::json;
 use th_core::driver::{TunnelEvent, VpnDriver};
 use th_core::manifest::{self, Manifest, Protocol};
-use th_core::rotation::{Overrides, RotationError, Rotator, State, Trigger};
+use th_core::rotation::{MAX_ATTEMPTS, Overrides, RotationError, Rotator, State, Trigger};
 use th_core::testing::{CallLog, FakeKillSwitch, FakeProbe, FakeResolver, MockDriver};
 
 const ISP: IpAddr = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 1));
-const VPN: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 50));
+const FIRST_EXIT: Ipv4Addr = Ipv4Addr::new(198, 51, 100, 50);
+const VPN: IpAddr = IpAddr::V4(FIRST_EXIT);
 
 fn manifest(profiles: &[&str], on_disconnect: &str) -> Manifest {
     let profiles: Vec<_> = profiles
@@ -54,7 +55,7 @@ impl Rig {
         let log = CallLog::default();
         let driver = Arc::new(MockDriver::new(log.clone()));
         let killswitch = Arc::new(FakeKillSwitch::new(log.clone()));
-        let probe = Arc::new(FakeProbe::new(log.clone(), VPN));
+        let probe = Arc::new(FakeProbe::new(log.clone(), FIRST_EXIT));
         let resolver = Arc::new(FakeResolver::new(log.clone(), m.clone()));
         let mut drivers: HashMap<Protocol, Arc<dyn VpnDriver>> = HashMap::new();
         drivers.insert(Protocol::Wireguard, driver.clone());
@@ -281,7 +282,7 @@ async fn no_usable_profile_is_an_error() {
         Overrides::default(),
         HashMap::new(),
         Arc::new(FakeKillSwitch::new(log.clone())),
-        Arc::new(FakeProbe::new(log.clone(), VPN)),
+        Arc::new(FakeProbe::new(log.clone(), FIRST_EXIT)),
         Arc::new(FakeResolver::new(log.clone(), m)),
         StdRng::seed_from_u64(1),
     );
@@ -441,7 +442,11 @@ async fn the_isp_address_is_recorded_again_after_a_disconnect() {
         2,
         "{log:?}"
     );
-    assert_eq!(status.public_ip, Some(VPN));
+    assert_eq!(
+        status.public_ip,
+        Some(rig.probe.exit(1)),
+        "the second connection's exit"
+    );
 }
 
 #[tokio::test]
@@ -499,4 +504,154 @@ async fn a_bundle_where_every_profile_lacks_credentials_has_no_candidates() {
     let error = rig.rotate().await.unwrap_err();
     assert!(matches!(error, RotationError::NoCandidates(_)), "{error:?}");
     assert!(rig.log.take().is_empty(), "nothing may be touched");
+}
+
+// ---- A rotation must change the public IP ---------------------------------------------------
+
+fn connects(log: &[String]) -> Vec<String> {
+    log.iter()
+        .filter(|e| e.starts_with("connect:"))
+        .cloned()
+        .collect()
+}
+
+#[tokio::test]
+async fn a_rotation_that_keeps_the_ip_tries_another_candidate() {
+    let mut rig = Rig::new(manifest(&["wg-a", "wg-b", "ovpn-c"], "reconnect_random"));
+    let first = rig.rotate().await.unwrap();
+    assert_eq!(
+        first.ip_changed, None,
+        "nothing to compare on the first connect"
+    );
+    let previous = first.public_ip.unwrap();
+    rig.log.take();
+
+    rig.probe.then(Ok(previous)); // the first candidate exits through the same address
+    let status = rig.rotate().await.unwrap();
+
+    let log = rig.log.take();
+    assert_eq!(connects(&log).len(), 2, "{log:?}");
+    assert!(
+        log.contains(&"revoke:2".to_string()),
+        "the same-IP tunnel is torn down: {log:?}"
+    );
+    assert_eq!(status.ip_changed, Some(true));
+    assert_ne!(status.public_ip, Some(previous));
+}
+
+#[tokio::test]
+async fn when_no_candidate_changes_the_ip_it_stays_connected_and_says_so() {
+    let mut rig = Rig::new(manifest(
+        &["wg-a", "wg-b", "ovpn-c", "wg-d"],
+        "reconnect_random",
+    ));
+    let previous = rig.rotate().await.unwrap().public_ip.unwrap();
+    rig.log.take();
+    for _ in 0..=MAX_ATTEMPTS {
+        rig.probe.then(Ok(previous));
+    }
+
+    let status = rig.rotate().await.unwrap();
+
+    let log = rig.log.take();
+    let attempts = connects(&log);
+    assert_eq!(
+        attempts.len(),
+        MAX_ATTEMPTS + 1,
+        "three tries, then the fallback: {log:?}"
+    );
+    assert_eq!(
+        attempts.last(),
+        attempts.first(),
+        "the fallback is the first soft failure"
+    );
+    assert_eq!(status.state, State::Connected, "never Blocked for this");
+    assert_eq!(status.ip_changed, Some(false));
+    assert_eq!(status.public_ip, Some(previous));
+}
+
+#[tokio::test]
+async fn a_fallback_that_fails_ends_blocked_like_any_exhausted_rotation() {
+    let mut rig = Rig::new(manifest(&["wg-a", "wg-b", "ovpn-c"], "reconnect_random"));
+    let previous = rig.rotate().await.unwrap().public_ip.unwrap();
+    for _ in 0..MAX_ATTEMPTS {
+        rig.probe.then(Ok(previous));
+    }
+    rig.probe.then(Err("network down".into()));
+
+    let error = rig.rotate().await.unwrap_err();
+
+    let RotationError::Exhausted(failures) = error else {
+        panic!("{error:?}")
+    };
+    assert_eq!(failures.len(), MAX_ATTEMPTS + 1, "{failures:?}");
+    assert!(failures[0].contains("did not change"), "{failures:?}");
+    let status = rig.rotator.status();
+    assert_eq!(status.state, State::Blocked);
+    assert!(status.killswitch_engaged);
+    assert_eq!(status.ip_changed, None);
+}
+
+#[tokio::test]
+async fn reconnecting_a_lost_tunnel_accepts_the_same_ip() {
+    let mut rig = Rig::new(manifest(&["wg-a", "wg-b"], "reconnect_same"));
+    let previous = rig.rotate().await.unwrap().public_ip.unwrap();
+    rig.log.take();
+    rig.probe.then(Ok(previous));
+
+    let status = rig
+        .rotator
+        .rotate(Trigger::TunnelLost, rig.now)
+        .await
+        .unwrap();
+
+    assert_eq!(connects(&rig.log.take()).len(), 1);
+    assert_eq!(status.public_ip, Some(previous));
+    assert_eq!(status.ip_changed, None);
+}
+
+#[tokio::test]
+async fn a_chosen_profile_or_a_single_profile_bundle_accepts_the_same_ip() {
+    let mut rig = Rig::new(manifest(&["wg-a", "wg-b"], "reconnect_random"));
+    let previous = rig.rotate().await.unwrap().public_ip.unwrap();
+    rig.probe.then(Ok(previous));
+    let status = rig.rotator.connect_to("wg-a", rig.now).await.unwrap();
+    assert_eq!(
+        (status.public_ip, status.ip_changed),
+        (Some(previous), None)
+    );
+
+    let mut rig = Rig::new(manifest(&["wg-only"], "reconnect_random"));
+    let previous = rig.rotate().await.unwrap().public_ip.unwrap();
+    rig.log.take();
+    rig.probe.then(Ok(previous));
+    let status = rig.rotate().await.unwrap();
+    assert_eq!(connects(&rig.log.take()).len(), 1);
+    assert_eq!(
+        (status.public_ip, status.ip_changed),
+        (Some(previous), None)
+    );
+}
+
+#[tokio::test]
+async fn profiles_behind_a_different_entry_are_tried_first() {
+    let mut rig = Rig::new(manifest(
+        &["wg-a", "wg-b", "ovpn-c", "wg-d"],
+        "reconnect_random",
+    ));
+    rig.rotator.set_entry_hosts(HashMap::from([
+        ("wg-a".to_string(), vec!["149.88.110.33".to_string()]),
+        ("wg-b".to_string(), vec!["130.195.241.2".to_string()]),
+        // Same entry as wg-a, like Proton's UA#21 (WireGuard) and UA#39 (OpenVPN).
+        ("ovpn-c".to_string(), vec!["149.88.110.33".to_string()]),
+        ("wg-d".to_string(), vec!["149.88.110.33".to_string()]),
+    ]));
+    rig.rotator.connect_to("wg-a", rig.now).await.unwrap();
+    rig.log.take();
+
+    let status = rig.rotate().await.unwrap();
+
+    // wg-b is the only profile behind another entry, so it is the one tried.
+    assert_eq!(status.profile_id.as_deref(), Some("wg-b"));
+    assert_eq!(connects(&rig.log.take()), ["connect:wg-b"]);
 }
