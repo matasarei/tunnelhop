@@ -134,11 +134,14 @@ fn check_bundle_id(id: &str) -> Result<(), IpcError> {
     }
 }
 
+/// The manifest's own rule: ids become storage keys in the service, so nothing else is let in.
 fn check_profile_id(id: &str) -> Result<(), IpcError> {
-    if id.is_empty() || id.len() > 40 {
-        Err(IpcError::Invalid("profile id is out of range".into()))
-    } else {
+    if crate::manifest::is_valid_id(id) {
         Ok(())
+    } else {
+        Err(IpcError::Invalid(
+            "profile id must match ^[a-z0-9-]{1,40}$".into(),
+        ))
     }
 }
 
