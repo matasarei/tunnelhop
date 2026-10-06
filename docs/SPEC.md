@@ -161,7 +161,8 @@ Allowed: `client`, `dev`, `dev-type`, `proto`, `remote`, `remote-random`, `resol
 `pull-filter`, `redirect-gateway`, `block-ipv6`, `ping`, `ping-restart`, `connect-retry`,
 `connect-retry-max`, `server-poll-timeout`, `float`, `mssfix`, `tun-mtu`, `fragment`, `sndbuf`,
 `rcvbuf`, `verify-x509-name`, `explicit-exit-notify`, `port`, `lport`, `windows-driver`,
-`setenv opt block-outside-dns` (that exact form only), `block-outside-dns`.
+`reneg-sec` (one number), `setenv opt block-outside-dns` and `setenv CLIENT_CERT 0` (those exact
+forms only), `block-outside-dns`.
 
 Inline blocks allowed: `<ca>`, `<cert>`, `<key>`, `<tls-auth>`, `<tls-crypt>`, `<tls-crypt-v2>`.
 Any other inline block is an error.
