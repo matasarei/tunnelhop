@@ -3,6 +3,7 @@
 
 pub mod bundle;
 pub mod driver;
+pub mod ipc;
 pub mod manifest;
 pub mod rotation;
 pub mod sanitize;
