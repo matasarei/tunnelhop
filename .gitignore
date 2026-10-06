@@ -22,6 +22,7 @@ node_modules/
 *.ovpn
 *.conf
 !docs/**/*.conf
+!crates/**/tests/fixtures/**
 test-infra/data/
 auth.txt
 *.zip
