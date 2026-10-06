@@ -182,6 +182,14 @@ fn requests_are_validated() {
         .is_err()
     );
     assert!(
+        Request::SelectBundle {
+            bundle_id: "0123456789ABCDEF".into()
+        }
+        .validate()
+        .is_err(),
+        "bundle ids are lowercase"
+    );
+    assert!(
         Request::Connect {
             profile_id: Some(String::new())
         }

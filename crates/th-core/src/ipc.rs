@@ -66,10 +66,13 @@ impl Request {
                 IpcError::Invalid("interval must be between 1 and 1440 minutes".into()),
             ),
             Request::SelectBundle { bundle_id }
-                if bundle_id.len() != 16 || !bundle_id.bytes().all(|b| b.is_ascii_hexdigit()) =>
+                if bundle_id.len() != 16
+                    || !bundle_id
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
             {
                 Err(IpcError::Invalid(
-                    "bundle id must be 16 hex characters".into(),
+                    "bundle id must be 16 lowercase hex characters".into(),
                 ))
             }
             Request::Connect {
