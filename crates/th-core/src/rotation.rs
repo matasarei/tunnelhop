@@ -109,6 +109,7 @@ pub struct Rotator {
     engaged: bool,
     connected_at: Option<Instant>,
     reconnecting_since: Option<Instant>,
+    missing_credentials: HashSet<String>,
 }
 
 impl Rotator {
@@ -137,6 +138,7 @@ impl Rotator {
             engaged: false,
             connected_at: None,
             reconnecting_since: None,
+            missing_credentials: HashSet::new(),
         }
     }
 
@@ -159,6 +161,12 @@ impl Rotator {
             public_ip: self.public_ip,
             killswitch_engaged: self.engaged,
         }
+    }
+
+    /// Profiles that cannot connect until the user gives credentials. They are never picked
+    /// for rotation, and connecting to one by name is refused. Replaces the previous set.
+    pub fn set_missing_credentials(&mut self, profile_ids: HashSet<String>) {
+        self.missing_credentials = profile_ids;
     }
 
     pub fn set_overrides(&mut self, overrides: Overrides) {
@@ -246,6 +254,11 @@ impl Rotator {
         profile_id: &str,
         now: Instant,
     ) -> Result<Status, RotationError> {
+        if self.missing_credentials.contains(profile_id) {
+            return Err(RotationError::NoCandidates(format!(
+                "profile \"{profile_id}\" needs credentials"
+            )));
+        }
         if !self.usable_profiles().contains(&profile_id.to_string()) {
             return Err(RotationError::NoCandidates(format!(
                 "profile \"{profile_id}\" does not exist or its runtime is unavailable"
@@ -281,7 +294,11 @@ impl Rotator {
         self.manifest
             .profiles
             .iter()
-            .filter(|p| allowed.contains(&p.protocol) && self.drivers.contains_key(&p.protocol))
+            .filter(|p| {
+                allowed.contains(&p.protocol)
+                    && self.drivers.contains_key(&p.protocol)
+                    && !self.missing_credentials.contains(&p.id)
+            })
             .map(|p| p.id.clone())
             .collect()
     }

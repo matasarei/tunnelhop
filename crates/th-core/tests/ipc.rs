@@ -22,6 +22,7 @@ fn report() -> StatusReport {
                 id: "ua-wg-01".into(),
                 name: "Kyiv #1".into(),
                 protocol: Protocol::Wireguard,
+                has_credentials: true,
             }],
         }),
         auto_rotate: true,
@@ -91,6 +92,7 @@ fn every_message_round_trips() {
         Response::Imported {
             bundle: report().bundle.unwrap(),
             already_present: false,
+            needs_credentials: vec!["ua-ovpn-01".into()],
         },
         Response::ImportFailed {
             errors: vec!["openvpn/a.ovpn:3: directive \"up\" is not allowed".into()],
@@ -251,4 +253,93 @@ fn a_peer_that_never_ends_a_line_is_cut_off() {
         ipc::decode::<ClientMessage>(&vec![b' '; MAX_FRAME_BYTES + 1]),
         Err(IpcError::TooLarge)
     );
+}
+
+fn set_credentials(profile_ids: Vec<&str>, username: &str, password: &str) -> Request {
+    Request::SetCredentials {
+        bundle_id: "0123456789abcdef".into(),
+        profile_ids: profile_ids.into_iter().map(String::from).collect(),
+        username: username.into(),
+        password: ipc::Secret::new(password),
+    }
+}
+
+#[test]
+fn set_credentials_round_trips_and_validates() {
+    let request = set_credentials(vec![], "user+f1", "p@ss \"quoted\" \\ back");
+    assert!(request.validate().is_ok());
+    let message = ClientMessage { id: 1, request };
+    let back: ClientMessage = ipc::decode(ipc::encode(&message).trim_ascii_end()).unwrap();
+    assert_eq!(back, message);
+
+    assert!(
+        set_credentials(vec!["ua-ovpn-39"], "u", "p")
+            .validate()
+            .is_ok()
+    );
+    for (request, needle) in [
+        (
+            set_credentials(vec![], "", "p"),
+            "username must be 1 to 256",
+        ),
+        (
+            set_credentials(vec![], "u", ""),
+            "password must be 1 to 256",
+        ),
+        (
+            set_credentials(vec![], &"u".repeat(257), "p"),
+            "username must be 1 to 256",
+        ),
+        (
+            set_credentials(vec![], "u", "line\nbreak"),
+            "password must not contain line breaks",
+        ),
+        (
+            set_credentials(vec![], "u\r", "p"),
+            "username must not contain line breaks",
+        ),
+        (
+            set_credentials(vec![], "u", "nul\0"),
+            "password must not contain line breaks or NUL",
+        ),
+        (set_credentials(vec![""], "u", "p"), "profile id must match"),
+    ] {
+        let error = request.validate().unwrap_err().to_string();
+        assert!(error.contains(needle), "{error}");
+    }
+    let mut bad_bundle = set_credentials(vec![], "u", "p");
+    if let Request::SetCredentials { bundle_id, .. } = &mut bad_bundle {
+        *bundle_id = "../../etc".into();
+    }
+    assert!(bad_bundle.validate().is_err());
+}
+
+#[test]
+fn profile_ids_follow_the_manifest_rule() {
+    for bad in ["../../x", "UA-WG-01", "a/b", "a\\b", "a.b", ""] {
+        let connect = Request::Connect {
+            profile_id: Some(bad.into()),
+        };
+        assert!(connect.validate().is_err(), "connect {bad:?}");
+        assert!(
+            set_credentials(vec![bad], "u", "p").validate().is_err(),
+            "set_credentials {bad:?}"
+        );
+    }
+    assert!(
+        Request::Connect {
+            profile_id: Some("ua-wg-01".into())
+        }
+        .validate()
+        .is_ok()
+    );
+}
+
+#[test]
+fn passwords_never_appear_in_debug_output() {
+    let request = set_credentials(vec![], "alice", "hunter2-secret");
+    let printed = format!("{request:?}");
+    assert!(printed.contains("alice"));
+    assert!(!printed.contains("hunter2-secret"), "{printed}");
+    assert!(printed.contains("<redacted>"));
 }

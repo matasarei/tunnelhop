@@ -228,7 +228,7 @@ fn check_name(field: &str, value: &str, errors: &mut Vec<ManifestError>) {
     }
 }
 
-fn is_valid_id(id: &str) -> bool {
+pub(crate) fn is_valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_ID_CHARS
         && id

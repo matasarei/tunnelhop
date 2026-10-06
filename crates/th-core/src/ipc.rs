@@ -7,6 +7,7 @@
 //! Everything arriving here is untrusted: frames are size-limited before they are parsed, and
 //! every request is validated before the service acts on it.
 
+use std::fmt;
 use std::net::IpAddr;
 
 use base64::Engine;
@@ -55,7 +56,38 @@ pub enum Request {
     Shutdown {
         disconnect: bool,
     },
+    /// OpenVPN credentials for profiles in a bundle; an empty `profile_ids` means every
+    /// OpenVPN profile in it.
+    SetCredentials {
+        bundle_id: String,
+        profile_ids: Vec<String>,
+        username: String,
+        password: Secret,
+    },
 }
+
+/// A value that must never reach a log: `Debug` prints a placeholder.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    pub fn new(value: impl Into<String>) -> Self {
+        Secret(value.into())
+    }
+
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Debug for Secret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
+const MAX_CREDENTIAL_CHARS: usize = 256;
 
 impl Request {
     /// Check the request's own values; the service still checks them against its state.
@@ -65,24 +97,69 @@ impl Request {
             Request::SetInterval { minutes } if !(1..=1440).contains(minutes) => Err(
                 IpcError::Invalid("interval must be between 1 and 1440 minutes".into()),
             ),
-            Request::SelectBundle { bundle_id }
-                if bundle_id.len() != 16
-                    || !bundle_id
-                        .bytes()
-                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) =>
-            {
-                Err(IpcError::Invalid(
-                    "bundle id must be 16 lowercase hex characters".into(),
-                ))
-            }
+            Request::SelectBundle { bundle_id } => check_bundle_id(bundle_id),
             Request::Connect {
                 profile_id: Some(id),
-            } if id.is_empty() || id.len() > 40 => {
-                Err(IpcError::Invalid("profile id is out of range".into()))
+            } => check_profile_id(id),
+            Request::SetCredentials {
+                bundle_id,
+                profile_ids,
+                username,
+                password,
+            } => {
+                check_bundle_id(bundle_id)?;
+                if profile_ids.len() > crate::manifest::MAX_PROFILES {
+                    return Err(IpcError::Invalid("too many profile ids".into()));
+                }
+                profile_ids.iter().try_for_each(|id| check_profile_id(id))?;
+                check_credential("username", username)?;
+                check_credential("password", password.expose())
             }
             _ => Ok(()),
         }
     }
+}
+
+fn check_bundle_id(id: &str) -> Result<(), IpcError> {
+    let valid = id.len() == 16
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    if valid {
+        Ok(())
+    } else {
+        Err(IpcError::Invalid(
+            "bundle id must be 16 lowercase hex characters".into(),
+        ))
+    }
+}
+
+/// The manifest's own rule: ids become storage keys in the service, so nothing else is let in.
+fn check_profile_id(id: &str) -> Result<(), IpcError> {
+    if crate::manifest::is_valid_id(id) {
+        Ok(())
+    } else {
+        Err(IpcError::Invalid(
+            "profile id must match ^[a-z0-9-]{1,40}$".into(),
+        ))
+    }
+}
+
+/// Credentials end up as one line each in OpenVPN's management protocol: no line breaks or
+/// NUL, and a bounded length.
+fn check_credential(what: &str, value: &str) -> Result<(), IpcError> {
+    let chars = value.chars().count();
+    if chars == 0 || chars > MAX_CREDENTIAL_CHARS {
+        return Err(IpcError::Invalid(format!(
+            "{what} must be 1 to {MAX_CREDENTIAL_CHARS} characters"
+        )));
+    }
+    if value.contains(['\r', '\n', '\0']) {
+        return Err(IpcError::Invalid(format!(
+            "{what} must not contain line breaks or NUL"
+        )));
+    }
+    Ok(())
 }
 
 /// Decode an `ImportBundle` payload, enforcing the archive size limit.
@@ -112,6 +189,8 @@ pub enum Response {
     Imported {
         bundle: BundleInfo,
         already_present: bool,
+        /// OpenVPN profiles that cannot connect until the user gives credentials.
+        needs_credentials: Vec<String>,
     },
     ImportFailed {
         errors: Vec<String>,
@@ -175,6 +254,8 @@ pub struct ProfileInfo {
     pub id: String,
     pub name: String,
     pub protocol: Protocol,
+    /// False for an OpenVPN profile still waiting for credentials.
+    pub has_credentials: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

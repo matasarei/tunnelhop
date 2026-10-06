@@ -50,6 +50,9 @@ pub struct SanitizedConfig {
     pub text: String,
     pub endpoints: Vec<Endpoint>,
     pub credentials: Option<Credentials>,
+    /// The runtime will ask for a username and password (OpenVPN `auth-user-pass`, in either
+    /// form). When `credentials` is `None`, they must come from the user.
+    pub asks_credentials: bool,
 }
 
 /// Sanitize one profile's config. `file` is its path inside the bundle; `read` returns another

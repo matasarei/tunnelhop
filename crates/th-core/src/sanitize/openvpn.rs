@@ -68,6 +68,7 @@ pub fn sanitize(
     let mut proto = Transport::Udp;
     let mut port = DEFAULT_PORT;
     let mut credentials = None;
+    let mut asks_credentials = false;
     let mut inline_until: Option<(String, usize)> = None;
 
     for (index, line) in text.lines().enumerate() {
@@ -171,14 +172,17 @@ pub fn sanitize(
                 [value] if value.parse::<u32>().is_ok() => Ok(()),
                 _ => Err("reneg-sec needs one number of seconds".into()),
             },
-            "auth-user-pass" => match args {
-                [] => Ok(()),
-                [path] => read_credentials(file, path, read).map(|c| {
-                    credentials = Some(c);
-                    emitted = "auth-user-pass".to_string();
-                }),
-                _ => Err("auth-user-pass takes at most one file".into()),
-            },
+            "auth-user-pass" => {
+                asks_credentials = true;
+                match args {
+                    [] => Ok(()),
+                    [path] => read_credentials(file, path, read).map(|c| {
+                        credentials = Some(c);
+                        emitted = "auth-user-pass".to_string();
+                    }),
+                    _ => Err("auth-user-pass takes at most one file".into()),
+                }
+            }
             other => Err(format!("directive \"{other}\" is not allowed")),
         };
         if let Err(message) = verdict {
@@ -215,6 +219,7 @@ pub fn sanitize(
         text,
         endpoints,
         credentials,
+        asks_credentials,
     })
 }
 
