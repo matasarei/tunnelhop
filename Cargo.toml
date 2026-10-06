@@ -1,0 +1,9 @@
+[workspace]
+resolver = "3"
+members = ["crates/th-core", "crates/th-service"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "UNLICENSED"
+publish = false
