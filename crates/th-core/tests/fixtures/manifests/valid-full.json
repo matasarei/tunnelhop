@@ -1,0 +1,17 @@
+{
+  "schema_version": "1",
+  "bundle_name": "Ukraine Server Cluster",
+  "protocols": ["wireguard", "openvpn"],
+  "rotation": {
+    "enabled": true,
+    "strategy": "random",
+    "interval_minutes": 15,
+    "on_disconnect": "reconnect_random",
+    "reconnect_grace_seconds": 20
+  },
+  "profiles": [
+    { "id": "ua-wg-01", "name": "Kyiv #1 (WG)", "protocol": "wireguard", "file": "wireguard/ua-kyiv-01.conf" },
+    { "id": "ua-wg-02", "name": "Kyiv #2 (WG)", "protocol": "wireguard", "file": "wireguard/ua-kyiv-02.conf" },
+    { "id": "ua-ovpn-01", "name": "Kyiv #1 (OpenVPN)", "protocol": "openvpn", "file": "openvpn/ua-kyiv-01.ovpn" }
+  ]
+}

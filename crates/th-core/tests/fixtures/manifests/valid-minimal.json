@@ -1,0 +1,7 @@
+{
+  "schema_version": "1",
+  "bundle_name": "Single",
+  "profiles": [
+    { "id": "only", "name": "Only one", "protocol": "openvpn", "file": "openvpn/only.ovpn" }
+  ]
+}
