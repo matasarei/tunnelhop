@@ -249,23 +249,33 @@ fn profile_file_missing_from_the_archive_is_refused() {
 }
 
 #[test]
-fn a_failed_install_leaves_no_staging_behind() {
+fn an_obstructed_install_leaves_no_staging_behind() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().join("bundles");
     let bytes = valid_bundle(vec![]);
-    // A plain file where the bundle directory goes: everything stages, then the rename fails.
+    // A plain file where the bundle directory goes: everything stages, then the final rename
+    // hits it.
     fs::create_dir_all(&root).unwrap();
     let target = root.join(BundleId::of(&bytes).as_str());
     fs::write(&target, b"in the way").unwrap();
 
-    let errors = bundle::import(&bytes, &root).unwrap_err();
+    let result = bundle::import(&bytes, &root);
 
-    assert!(
-        errors[0]
-            .to_string()
-            .starts_with("could not write the bundle"),
-        "{errors:?}"
-    );
+    // Unix refuses to rename a directory onto a file, so the import fails; Windows replaces
+    // the file, so the import succeeds. Either way, the staging directory must be gone.
+    #[cfg(unix)]
+    {
+        let errors = result.unwrap_err();
+        assert!(
+            errors[0]
+                .to_string()
+                .starts_with("could not write the bundle"),
+            "{errors:?}"
+        );
+    }
+    #[cfg(windows)]
+    assert!(result.unwrap().dir.join("manifest.json").is_file());
+
     let names: Vec<_> = fs::read_dir(&root)
         .unwrap()
         .map(|e| e.unwrap().file_name())
