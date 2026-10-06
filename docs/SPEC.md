@@ -262,19 +262,25 @@ survive a service crash.
 Triggered by the interval timer, by "Rotate Now", or by the current tunnel being down (or
 reconnecting longer than `reconnect_grace_seconds`) when `on_disconnect` is not `stay_down`.
 
-1. **Candidates:** profiles whose protocol is in `protocols` and whose runtime is available,
-   minus the current profile. If none are left, reconnect the current profile.
-   `reconnect_same` always picks the current profile.
-2. Pick one uniformly at random.
+1. **Candidates:** profiles whose protocol is in `protocols`, whose runtime is available and
+   which have credentials if they need them, minus the current profile. If none are left,
+   reconnect the current profile. `reconnect_same` always picks the current profile.
+2. Pick one uniformly at random, preferring profiles whose server hosts differ from the current
+   profile's: providers route several exits through one entry address.
 3. Resolve its endpoints while the old tunnel is still up.
 4. Engage the kill-switch with the old and new endpoints; revoke the old interface; disconnect
    the old tunnel.
 5. Connect the new tunnel; allow its interface.
 6. **Probe** the public IP: `https://api.ipify.org`, then `https://ipinfo.io/ip`, 5 s timeout
-   each. The result must parse as an IP and differ from the ISP address (recorded once, before
-   the first connection).
-7. If connect or probe fails, try another candidate — at most 3 attempts in total. After that
-   the state is `Blocked`: the kill-switch stays engaged and the UI shows an alert.
+   each. The result must parse as an IP and differ from the ISP address (recorded before every
+   connection that starts with no tunnel and no kill-switch). For a timer or "Rotate Now"
+   rotation with more than one usable profile it must also differ from the previous VPN
+   address; a tunnel that keeps it is torn down and counts as a soft failure.
+7. If connect or probe fails, try another candidate — at most 3 attempts in total. If every
+   failure was soft, reconnect the first of them and stay `Connected`, telling the user the IP
+   did not change. Otherwise the state is `Blocked`: the kill-switch stays engaged and the UI
+   shows an alert. A lost tunnel's reconnect, a profile the user picked, and a one-profile
+   bundle never apply the different-address rule.
 8. Publish the new status (profile, IP, state, kill-switch) to the UI.
 
 The user's choices in the tray — auto-rotation on/off and the interval — are stored in
