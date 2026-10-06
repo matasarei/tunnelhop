@@ -155,13 +155,22 @@ pub fn sanitize(
                 [value] if value == "no" || value == "asym" => Ok(()),
                 _ => Err("only \"allow-compression no\" or \"asym\" is allowed".into()),
             },
+            // `setenv` only feeds scripts, which are refused, but stays an exact-match list:
+            // the two forms providers actually ship.
             "setenv" => {
-                if args == ["opt", "block-outside-dns"] {
+                if args == ["opt", "block-outside-dns"] || args == ["CLIENT_CERT", "0"] {
                     Ok(())
                 } else {
-                    Err("only \"setenv opt block-outside-dns\" is allowed".into())
+                    Err(
+                        "only \"setenv opt block-outside-dns\" and \"setenv CLIENT_CERT 0\" are allowed"
+                            .into(),
+                    )
                 }
             }
+            "reneg-sec" => match args {
+                [value] if value.parse::<u32>().is_ok() => Ok(()),
+                _ => Err("reneg-sec needs one number of seconds".into()),
+            },
             "auth-user-pass" => match args {
                 [] => Ok(()),
                 [path] => read_credentials(file, path, read).map(|c| {

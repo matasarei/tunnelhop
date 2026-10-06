@@ -189,11 +189,11 @@ fn long_lines_cannot_close_an_inline_block_early() {
 fn restricted_arguments_are_enforced() {
     assert_err(
         ovpn(&format!("{BASE}setenv opt up\n")),
-        "only \"setenv opt block-outside-dns\"",
+        "only \"setenv opt block-outside-dns\" and \"setenv CLIENT_CERT 0\"",
     );
     assert_err(
         ovpn(&format!("{BASE}setenv PATH C:\\evil\n")),
-        "only \"setenv opt block-outside-dns\"",
+        "only \"setenv opt block-outside-dns\" and \"setenv CLIENT_CERT 0\"",
     );
     assert_err(
         ovpn(&format!("{BASE}comp-lzo yes\n")),
@@ -213,6 +213,26 @@ fn restricted_arguments_are_enforced() {
         "unsupported protocol \"sctp\"",
     );
     assert_err(ovpn(&format!("{BASE}port 0\n")), "invalid port");
+}
+
+#[test]
+fn proton_style_lines_are_accepted_with_exact_arguments() {
+    ovpn(&format!(
+        "{BASE}setenv CLIENT_CERT 0\nreneg-sec 0\nreneg-sec 3600\n"
+    ))
+    .unwrap();
+    assert_err(
+        ovpn(&format!("{BASE}setenv CLIENT_CERT 1\n")),
+        "only \"setenv opt block-outside-dns\"",
+    );
+    assert_err(
+        ovpn(&format!("{BASE}reneg-sec\n")),
+        "reneg-sec needs one number of seconds",
+    );
+    assert_err(
+        ovpn(&format!("{BASE}reneg-sec 60 /tmp/x\n")),
+        "reneg-sec needs one number of seconds",
+    );
 }
 
 #[test]
