@@ -422,6 +422,29 @@ async fn the_timer_follows_the_interval_and_user_overrides_win() {
 }
 
 #[tokio::test]
+async fn the_isp_address_is_recorded_again_after_a_disconnect() {
+    let new_isp = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9));
+    let mut rig = Rig::new(manifest(&["wg-a", "wg-b"], "reconnect_random"));
+    rig.rotate().await.unwrap();
+    rig.rotator.disconnect().await.unwrap();
+    rig.log.take();
+
+    // The laptop moved to another network: the unprotected address is now `new_isp`, and the
+    // first attempt's probe still sees it.
+    rig.probe.then(Ok(new_isp)).then(Ok(new_isp));
+    let status = rig.rotate().await.unwrap();
+
+    let log = rig.log.take();
+    assert_eq!(log[0], "probe", "{log:?}");
+    assert_eq!(
+        log.iter().filter(|e| e.starts_with("connect:")).count(),
+        2,
+        "{log:?}"
+    );
+    assert_eq!(status.public_ip, Some(VPN));
+}
+
+#[tokio::test]
 async fn disconnect_tears_down_and_lifts_the_kill_switch() {
     let mut rig = Rig::new(manifest(&["wg-a"], "reconnect_random"));
     rig.rotate().await.unwrap();

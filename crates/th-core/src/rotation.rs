@@ -324,8 +324,9 @@ impl Rotator {
         candidates: Vec<String>,
         now: Instant,
     ) -> Result<Status, RotationError> {
-        if self.current.is_none() && !self.engaged && self.isp_ip.is_none() {
-            // Remember the unprotected address once, so a probe that still sees it is a failure.
+        if self.current.is_none() && !self.engaged {
+            // Record the unprotected address while it is still visible, so a probe that still
+            // sees it is a failure. Every time: the network may have changed since last time.
             self.isp_ip = self.probe.public_ip().await.ok();
         }
 
