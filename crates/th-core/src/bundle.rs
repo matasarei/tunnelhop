@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::manifest::{self, Manifest};
+use crate::sanitize::{self, Credentials, Endpoint};
 
 pub const MAX_ZIP_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 500;
@@ -93,6 +94,11 @@ pub struct ImportedBundle {
     pub id: BundleId,
     pub dir: PathBuf,
     pub manifest: Manifest,
+    /// Server endpoints per profile id, for the kill-switch.
+    pub endpoints: BTreeMap<String, Vec<Endpoint>>,
+    /// OpenVPN credentials per profile id, taken out of the archive for the caller to store
+    /// securely. Empty when `already_present`: they were handed over on the first import.
+    pub credentials: BTreeMap<String, Credentials>,
     /// The same zip was imported before; nothing was written this time.
     pub already_present: bool,
 }
@@ -112,10 +118,13 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
     let dir = root.join(id.as_str());
     if dir.is_dir() {
         let manifest = read_installed_manifest(&dir)?;
+        let prepared = prepare_profiles(&manifest, &|path| fs::read(dir.join(path)).ok())?;
         return Ok(ImportedBundle {
             id,
             dir,
             manifest,
+            endpoints: prepared.endpoints,
+            credentials: BTreeMap::new(),
             already_present: true,
         });
     }
@@ -130,9 +139,9 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
             .map(|e| ImportError::in_file(MANIFEST_FILE, e.to_string()))
             .collect::<Vec<_>>()
     })?;
-    let outputs = prepare_profile_files(&manifest, &entries)?;
+    let prepared = prepare_profiles(&manifest, &|path| entries.get(path).cloned())?;
 
-    install(root, &dir, manifest_bytes, &outputs).map_err(|e| {
+    install(root, &dir, manifest_bytes, &prepared.files).map_err(|e| {
         vec![ImportError::archive(format!(
             "could not write the bundle: {e}"
         ))]
@@ -142,6 +151,8 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
         id,
         dir,
         manifest,
+        endpoints: prepared.endpoints,
+        credentials: prepared.credentials,
         already_present: false,
     })
 }
@@ -288,29 +299,52 @@ fn check_entry_name(name: &str) -> Result<(), &'static str> {
     }
 }
 
-/// The files to install for the manifest's profiles, keyed by their path in the bundle.
-fn prepare_profile_files(
+struct Prepared {
+    /// Sanitized config text keyed by its path in the bundle.
+    files: BTreeMap<String, Vec<u8>>,
+    endpoints: BTreeMap<String, Vec<Endpoint>>,
+    credentials: BTreeMap<String, Credentials>,
+}
+
+/// Sanitize every profile's config; `read` returns a bundle file by its path.
+fn prepare_profiles(
     manifest: &Manifest,
-    entries: &BTreeMap<String, Vec<u8>>,
-) -> Result<BTreeMap<String, Vec<u8>>, Vec<ImportError>> {
+    read: &dyn Fn(&str) -> Option<Vec<u8>>,
+) -> Result<Prepared, Vec<ImportError>> {
     let mut errors = Vec::new();
-    let mut outputs = BTreeMap::new();
+    let mut prepared = Prepared {
+        files: BTreeMap::new(),
+        endpoints: BTreeMap::new(),
+        credentials: BTreeMap::new(),
+    };
     for (i, profile) in manifest.profiles.iter().enumerate() {
-        match entries.get(&profile.file) {
-            Some(content) => {
-                outputs.insert(profile.file.clone(), content.clone());
-            }
-            None => errors.push(ImportError::in_file(
+        let Some(content) = read(&profile.file) else {
+            errors.push(ImportError::in_file(
                 MANIFEST_FILE,
                 format!(
                     "profiles[{i}].file: \"{}\" is not in the archive",
                     profile.file
                 ),
-            )),
+            ));
+            continue;
+        };
+        match sanitize::sanitize(profile.protocol, &profile.file, &content, read) {
+            Ok(config) => {
+                prepared
+                    .files
+                    .insert(profile.file.clone(), config.text.into_bytes());
+                prepared
+                    .endpoints
+                    .insert(profile.id.clone(), config.endpoints);
+                if let Some(credentials) = config.credentials {
+                    prepared.credentials.insert(profile.id.clone(), credentials);
+                }
+            }
+            Err(found) => errors.extend(found),
         }
     }
     if errors.is_empty() {
-        Ok(outputs)
+        Ok(prepared)
     } else {
         Err(errors)
     }
