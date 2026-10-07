@@ -41,13 +41,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Release build carries no dev safety timer
         shell: bash
+        # One target directory for both builds: the dependencies compile once, and the second
+        # build recompiles only th-service. The release binary is copied aside first, because
+        # the dev-safety build overwrites it.
         run: |
           cargo build -p th-service --release
-          cargo build -p th-service --release --features dev-safety --target-dir target/dev-safety
-          if grep -q -a TUNNELHOP_DEV_SAFETY_TIMER target/release/th-service.exe; then
+          cp target/release/th-service.exe release.exe
+          cargo build -p th-service --release --features dev-safety
+          if grep -q -a TUNNELHOP_DEV_SAFETY_TIMER release.exe; then
             echo "::error::the release build contains the dev safety timer"; exit 1
           fi
-          if ! grep -q -a TUNNELHOP_DEV_SAFETY_TIMER target/dev-safety/release/th-service.exe; then
+          if ! grep -q -a TUNNELHOP_DEV_SAFETY_TIMER target/release/th-service.exe; then
             echo "::error::the dev-safety build lacks the marker, so the check above proves nothing"; exit 1
           fi
           echo "release build: no dev safety timer"
