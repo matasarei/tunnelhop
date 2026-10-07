@@ -821,6 +821,29 @@ pub fn interface_with_address(ip: std::net::IpAddr) -> io::Result<Option<u64>> {
     Ok(found)
 }
 
+/// Whether the interface exists and is operationally up (for a tunnel adapter: in use).
+pub fn interface_is_up(luid: u64) -> io::Result<bool> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{GetIfEntry2, MIB_IF_ROW2};
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+
+    if luid == 0 {
+        return Ok(false);
+    }
+    let mut row = MIB_IF_ROW2::default();
+    row.InterfaceLuid.Value = luid;
+    // SAFETY: a row with its LUID set, as the call requires.
+    match win32_result(unsafe { GetIfEntry2(&mut row) }) {
+        Ok(()) => Ok(row.OperStatus == IfOperStatusUp),
+        Err(e)
+            if e.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND as i32) =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
 /// Delete the routes a killed OpenVPN leaves behind: every manually added (`NETMGMT`) route on
 /// the tunnel's interface, and the host routes to its servers. Routes anyone else added on other
 /// interfaces are never touched. Returns how many were deleted.
@@ -955,6 +978,8 @@ mod tests {
     fn an_address_leads_to_its_interface() {
         let loopback = interface_with_address("127.0.0.1".parse().unwrap()).unwrap();
         assert!(loopback.is_some_and(|luid| luid != 0));
+        assert!(interface_is_up(loopback.unwrap()).unwrap());
+        assert!(!interface_is_up(0).unwrap(), "no interface has LUID 0");
         // TEST-NET-1: never assigned to a real interface.
         assert_eq!(
             interface_with_address("192.0.2.123".parse().unwrap()).unwrap(),

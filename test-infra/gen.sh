@@ -88,7 +88,24 @@ keepalive 10 60
 persist-key
 persist-tun
 verb 3
+# Clients may log in with the test username and password (the credential path a ProtonVPN
+# profile takes); clients without them still connect on their certificate alone.
+script-security 2
+auth-user-pass-verify /data/check-credentials.sh via-file
+auth-user-pass-optional
 EOF
+# Fixed, obviously fake test credentials. The password has a quote and a backslash, which the
+# management protocol must escape.
+cat >"$data/ovpn/check-credentials.sh" <<'EOF'
+#!/bin/sh
+# $1 holds the username on its first line and the password on its second.
+user=$(sed -n 1p "$1")
+pass=$(sed -n 2p "$1")
+[ -z "$user" ] && [ -z "$pass" ] && exit 0
+[ "$user" = th-test-user ] && [ "$pass" = 'th-test "pass\word' ] && exit 0
+exit 1
+EOF
+chmod 755 "$data/ovpn/check-credentials.sh"
 
 # Only directives TunnelHop's sanitizer allows, with everything inline.
 inline() { printf '<%s>\n' "$1"; grep -v '^#' "$2"; printf '</%s>\n' "$1"; }
@@ -111,6 +128,9 @@ EOF
     inline key "$pki/th-test-client.key"
     inline tls-crypt "$pki/tls-crypt.key"
 } >"$out/ovpn.ovpn"
+# The same profile with a bare auth-user-pass, as ProtonVPN ships them: credentials come over
+# the management interface.
+{ cat "$out/ovpn.ovpn"; echo auth-user-pass; } >"$out/ovpn-auth.ovpn"
 
 rm -rf "$pki"
 chmod -R a+rX "$data" "$out"
@@ -131,5 +151,5 @@ for name, profiles in [("bundle-wg.zip", wireguard), ("bundle-all.zip", wireguar
             bundle.write(f"{out}/{profile['file'].split('/')[1]}", profile["file"])
 EOF
 
-echo "Wrote $data (servers) and $out (clients: wg-a.conf, wg-b.conf, ovpn.ovpn;"
+echo "Wrote $data (servers) and $out (clients: wg-a.conf, wg-b.conf, ovpn.ovpn, ovpn-auth.ovpn;"
 echo "bundles: bundle-wg.zip, bundle-all.zip) for $server"
