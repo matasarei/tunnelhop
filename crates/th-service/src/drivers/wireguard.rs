@@ -235,22 +235,34 @@ mod driver {
         }
 
         async fn run(&self, arguments: &[&std::ffi::OsStr]) -> Result<(), DriverError> {
-            let output = tokio::process::Command::new(&self.exe)
-                .args(arguments)
-                .creation_flags(CREATE_NO_WINDOW)
-                .output()
-                .await
-                .map_err(|e| failed(format!("cannot run {}", self.exe.display()), e))?;
+            let command = arguments
+                .first()
+                .map(|a| a.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            // Bounded: a hung wireguard.exe would otherwise stall a rotation for good, with the
+            // kill-switch engaged. Dropping the future on timeout kills the process.
+            let output = tokio::time::timeout(
+                SERVICE_TIMEOUT,
+                tokio::process::Command::new(&self.exe)
+                    .args(arguments)
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .kill_on_drop(true)
+                    .output(),
+            )
+            .await
+            .map_err(|_| {
+                DriverError::Timeout(format!(
+                    "wireguard.exe {command} did not finish within {} s",
+                    SERVICE_TIMEOUT.as_secs()
+                ))
+            })?
+            .map_err(|e| failed(format!("cannot run {}", self.exe.display()), e))?;
             if output.status.success() {
                 return Ok(());
             }
             let stderr = String::from_utf8_lossy(&output.stderr);
             Err(DriverError::Failed(format!(
-                "wireguard.exe {} exited with {}: {}",
-                arguments
-                    .first()
-                    .map(|a| a.to_string_lossy())
-                    .unwrap_or_default(),
+                "wireguard.exe {command} exited with {}: {}",
                 output.status,
                 stderr.trim()
             )))
