@@ -71,7 +71,7 @@ impl Default for Rotation {
         Rotation {
             enabled: true,
             strategy: Strategy::Random,
-            interval_minutes: 15,
+            interval_minutes: 60,
             on_disconnect: OnDisconnect::ReconnectRandom,
             reconnect_grace_seconds: 20,
         }

@@ -120,7 +120,7 @@ Schema: [`manifest.schema.json`](manifest.schema.json).
 | `rotation` | Optional; every field has a default. |
 | `rotation.enabled` | Default `true`. |
 | `rotation.strategy` | `"random"` (the only value in v1). |
-| `rotation.interval_minutes` | 1–1440, default 15. |
+| `rotation.interval_minutes` | 1–1440, default 60. |
 | `rotation.on_disconnect` | `"reconnect_same"`, `"reconnect_random"` (default) or `"stay_down"`. |
 | `rotation.reconnect_grace_seconds` | 5–300, default 20. How long a tunnel may stay in a reconnecting state before it counts as down. |
 | `profiles` | 1–500 entries. |
@@ -335,7 +335,7 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
   - Status: `Connected: <profile> (<IP>)`, `Blocked`, or `Disconnected`
   - Rotate Now
   - Auto-Rotation (checkbox)
-  - Interval ▸ 5 min · 15 min · 30 min · 1 hour
+  - Interval ▸ 15 min · 30 min · 1 hour · 2 hours · 4 hours
   - Disconnect & unblock
   - Open Dashboard
   - Exit — disconnects, disengages the kill-switch, and quits the UI

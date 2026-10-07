@@ -6,7 +6,7 @@ use th_core::ipc::StatusReport;
 use th_core::rotation::State;
 
 /// The rotation intervals the menu offers, in minutes.
-pub const INTERVALS: [u32; 4] = [5, 15, 30, 60];
+pub const INTERVALS: [u32; 5] = [15, 30, 60, 120, 240];
 
 /// The menu item ids, which [`Action::from_id`] maps back.
 pub mod ids {
@@ -50,6 +50,7 @@ impl Action {
 pub fn interval_label(minutes: u32) -> String {
     match minutes {
         60 => "1 hour".into(),
+        m if m % 60 == 0 => format!("{} hours", m / 60),
         m => format!("{m} min"),
     }
 }
@@ -260,7 +261,14 @@ mod tests {
             assert_eq!(Action::from_id(&id), Some(Action::Interval(minutes)));
         }
         // The status line is not clickable, and only the offered intervals exist.
-        for id in [ids::STATUS, "interval-7", "interval-", "interval-x", ""] {
+        for id in [
+            ids::STATUS,
+            "interval-5",
+            "interval-7",
+            "interval-",
+            "interval-x",
+            "",
+        ] {
             assert_eq!(Action::from_id(id), None, "{id}");
         }
     }
@@ -268,6 +276,6 @@ mod tests {
     #[test]
     fn intervals_read_as_the_spec_writes_them() {
         let labels: Vec<String> = INTERVALS.iter().map(|&m| interval_label(m)).collect();
-        assert_eq!(labels, ["5 min", "15 min", "30 min", "1 hour"]);
+        assert_eq!(labels, ["15 min", "30 min", "1 hour", "2 hours", "4 hours"]);
     }
 }

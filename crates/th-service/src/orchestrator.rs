@@ -29,7 +29,7 @@ use crate::credentials::{CredentialStore, Vault, bundle_info};
 use crate::store::{Layout, Settings};
 
 /// The default interval when neither the user nor a bundle set one.
-const DEFAULT_INTERVAL_MINUTES: u32 = 15;
+const DEFAULT_INTERVAL_MINUTES: u32 = 60;
 /// How often the timer and the reconnect grace are checked.
 const TICK: Duration = Duration::from_secs(1);
 
