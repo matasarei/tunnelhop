@@ -3,11 +3,15 @@
 //! Windows only, apart from the pure logic, which also builds elsewhere so it can be tested.
 
 pub mod credentials;
+#[cfg(windows)]
+pub mod ctl;
 pub mod drivers;
 pub mod killswitch;
 pub mod logging;
+pub mod orchestrator;
 #[cfg(windows)]
 pub mod pipe;
+pub mod probe;
 pub mod runtimes;
 pub mod store;
 #[cfg(windows)]

@@ -6,7 +6,7 @@
 .EXAMPLE
     scripts\vm.ps1 checkpoint before-wg        # always before a risky run
     scripts\vm.ps1 copy                        # release th-service.exe to C:\th
-    scripts\vm.ps1 configs ..\test-infra\out   # client configs to C:\th\configs
+    scripts\vm.ps1 configs test-infra\out      # client configs and bundles to C:\th\configs
     scripts\vm.ps1 test wg_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.conf' }
     scripts\vm.ps1 test lib -AsSystem          # the crate's VM-only unit tests, as SYSTEM
     scripts\vm.ps1 test killswitch_live -Features dev-safety -Env @{ TH_DEV_SAFETY_SECONDS = '3' }
@@ -120,8 +120,8 @@ switch ($Action) {
     }
     'configs' {
         Assert-Name 'the directory with the generated client configs (test-infra/out)'
-        $files = Get-ChildItem -File $Name -Include *.conf, *.ovpn -Recurse
-        if (-not $files) { throw "no .conf or .ovpn files in $Name" }
+        $files = Get-ChildItem -File $Name -Include *.conf, *.ovpn, *.zip -Recurse
+        if (-not $files) { throw "no .conf, .ovpn or .zip files in $Name" }
         $session = Open-Session
         try {
             foreach ($file in $files) {

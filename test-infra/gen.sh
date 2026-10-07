@@ -114,4 +114,22 @@ EOF
 
 rm -rf "$pki"
 chmod -R a+rX "$data" "$out"
-echo "Wrote $data (servers) and $out (clients: wg-a.conf, wg-b.conf, ovpn.ovpn) for $server"
+# Test bundles for importing into the service: WireGuard only (the leak test), and everything.
+python3 - "$out" <<'EOF'
+import json, sys, zipfile
+out = sys.argv[1]
+wireguard = [
+    {"id": "wg-a", "name": "Lab WG A", "protocol": "wireguard", "file": "wireguard/wg-a.conf"},
+    {"id": "wg-b", "name": "Lab WG B", "protocol": "wireguard", "file": "wireguard/wg-b.conf"},
+]
+openvpn = [{"id": "ovpn", "name": "Lab OpenVPN", "protocol": "openvpn", "file": "openvpn/ovpn.ovpn"}]
+for name, profiles in [("bundle-wg.zip", wireguard), ("bundle-all.zip", wireguard + openvpn)]:
+    manifest = {"schema_version": "1", "bundle_name": "TunnelHop lab", "profiles": profiles}
+    with zipfile.ZipFile(f"{out}/{name}", "w", zipfile.ZIP_DEFLATED) as bundle:
+        bundle.writestr("manifest.json", json.dumps(manifest, indent=2))
+        for profile in profiles:
+            bundle.write(f"{out}/{profile['file'].split('/')[1]}", profile["file"])
+EOF
+
+echo "Wrote $data (servers) and $out (clients: wg-a.conf, wg-b.conf, ovpn.ovpn;"
+echo "bundles: bundle-wg.zip, bundle-all.zip) for $server"

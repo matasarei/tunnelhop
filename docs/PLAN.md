@@ -223,7 +223,7 @@ step (or per closely related pair), opened as a PR against `main`.
       survives, and `th-service disengage` lifts it; with `dev-safety`, an unconfirmed engage
       lifts itself and a confirmed one stays; afterwards `netsh wfp show filters` lists
       nothing under TunnelHop's provider. Settled: see "Kill-switch and WireGuard's own" below.
-14. [ ] IP probe and orchestrator wiring: the rotation engine with real drivers and kill-switch,
+14. [x] IP probe and orchestrator wiring: the rotation engine with real drivers and kill-switch,
     timers, settings overrides, and pipe events (see "Wiring the engine" above).
     - The probe URLs come from `settings.json` (`probe_urls`), defaulting to ipify then ipinfo.
       Tests point them at the test servers' "what's my IP" endpoints, because the lab's
@@ -236,6 +236,14 @@ step (or per closely related pair), opened as a PR against `main`.
       orchestrator)
     - Test: the leak test in the VM (`pktmon` over 20 rotations, WireGuard only; procedure in
       DEVELOPMENT.md).
+    - **Landed and proven in `th-test` (2026-10-07):** `probe.rs`, `orchestrator.rs` (generic,
+      10 tests with th-core's doubles), the service running it, `th-service ctl`,
+      `bundle::open` in th-core, test bundles from `gen.sh`, and `scripts/leak-test.ps1`.
+      In the VM, through the installed service and `ctl`: import, select and connect, then
+      rotations alternate between `wg-a` and `wg-b` with the probe seeing `172.31.77.11` and
+      `.12`, and disconnect leaves no tunnel and no block. The leak test over 20 rotations:
+      **0 frames sent by the VM outside the tunnel** (4,144 of 4,256 captured frames were
+      WireGuard; the rest ARP and one inbound TCP reset from outside).
 
 ### M4: OpenVPN
 15. [ ] The management protocol client: auth, `state on`, `hold release`, `>STATE`/`>PASSWORD`
@@ -427,6 +435,17 @@ Implementation rulings worth knowing (full text in the commit bodies):
   if a release build contains it, or if a dev-safety build does not.
 - **Live kill-switch tests refuse to run unless `TH_TEST_VM=1`**, which only `scripts\vm.ps1`
   sets, a second guard beside `#[ignore]` against running one on the PC.
+- **Orchestrator (step 14):** importing a bundle does not activate it; `SelectBundle` does, and
+  first disconnects and lifts the block of the bundle before. At start the service reopens the
+  active bundle, adopts that bundle's leftover tunnel, removes any other `th-` tunnel, and keeps
+  a block it finds (`Blocked`; Disconnect lifts it even with no bundle). STOP and PRESHUTDOWN
+  disconnect and lift the block, bounded to 20 s. `probe_urls` is read at start.
+- **The probe** follows no redirects, ignores system proxy settings, and treats an answer over
+  64 bytes as no address.
+- **Endpoint resolution:** one address per endpoint, IPv4 first, in config order.
+- **What the leak test counts:** frames the VM *sends* on its physical adapter. pktmon captures
+  before the firewall, so inbound packets appear whether or not they are let in; they are listed
+  for information only.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -444,6 +463,7 @@ Still open:
   live test pass on `feature/wireguard-driver`; 163 tests pass on the PC.
 - **2026-10-07:** step 12 merged (PR #8). Step 13, the kill-switch, landed on
   `feature/killswitch` and passes in `th-test`, `dev-safety` build included.
-- **Next:** step 14, the IP probe and the orchestrator that drives rotation with the real
-  drivers and kill-switch, ending in the leak test. Step 15 (the OpenVPN management client)
-  needs no VM and can go in parallel.
+- **2026-10-07:** step 13 merged (PR #9). Step 14 landed on `feature/orchestrator`: TunnelHop
+  rotates end to end in `th-test`, and the WireGuard leak test passes.
+- **Next:** step 15, the OpenVPN management client (no VM needed), then step 16, the OpenVPN
+  driver and the mixed-protocol leak test.

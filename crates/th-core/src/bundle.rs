@@ -133,17 +133,7 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
     let id = BundleId::of(zip_bytes);
     let dir = root.join(id.as_str());
     if dir.is_dir() {
-        let manifest = read_installed_manifest(&dir)?;
-        let prepared = prepare_profiles(&manifest, &|path| fs::read(dir.join(path)).ok())?;
-        return Ok(ImportedBundle {
-            id,
-            dir,
-            manifest,
-            endpoints: prepared.endpoints,
-            credentials: BTreeMap::new(),
-            needs_credentials: prepared.needs_credentials,
-            already_present: true,
-        });
+        return open(root, &id);
     }
 
     let entries = read_entries(zip_bytes)?;
@@ -172,6 +162,24 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
         credentials: prepared.credentials,
         needs_credentials: prepared.needs_credentials,
         already_present: false,
+    })
+}
+
+/// A bundle installed earlier, as a restarted service finds it again. Read exactly as a repeated
+/// import would: `already_present`, and no credentials, since those were handed over the first
+/// time.
+pub fn open(root: &Path, id: &BundleId) -> Result<ImportedBundle, Vec<ImportError>> {
+    let dir = root.join(id.as_str());
+    let manifest = read_installed_manifest(&dir)?;
+    let prepared = prepare_profiles(&manifest, &|path| fs::read(dir.join(path)).ok())?;
+    Ok(ImportedBundle {
+        id: id.clone(),
+        dir,
+        manifest,
+        endpoints: prepared.endpoints,
+        credentials: BTreeMap::new(),
+        needs_credentials: prepared.needs_credentials,
+        already_present: true,
     })
 }
 
