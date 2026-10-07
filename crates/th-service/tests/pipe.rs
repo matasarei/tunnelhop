@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use th_core::ipc::{
     self, ClientMessage, Event, PROTOCOL_VERSION, Request, Response, ServerMessage,
 };
-use th_service::pipe::{self, Handler, Listener};
+use th_service::pipe::{self, Handler, Limits, Listener};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 use tokio::net::windows::named_pipe::NamedPipeClient;
 use tokio::sync::{broadcast, oneshot};
@@ -45,8 +45,12 @@ fn unique_name() -> String {
 }
 
 fn start() -> Server {
+    start_with(Limits::default())
+}
+
+fn start_with(limits: Limits) -> Server {
     let name = unique_name();
-    let listener = Listener::bind(&name).unwrap();
+    let listener = Listener::bind(&name).unwrap().with_limits(limits);
     let (events, _) = broadcast::channel(16);
     let (stop, stopped) = oneshot::channel::<()>();
     let task = tokio::spawn(listener.serve(Arc::new(Recorder), events.clone(), async {
@@ -286,4 +290,29 @@ async fn a_hello_and_a_request_sent_together_both_count() {
         ipc::check_version(PROTOCOL_VERSION).unwrap()
     );
     assert_eq!(client.response(2).await, Response::Pong);
+}
+
+#[tokio::test]
+async fn a_client_that_never_says_hello_is_dropped() {
+    let server = start_with(Limits {
+        hello_timeout: Duration::from_millis(200),
+        ..Limits::default()
+    });
+    let mut client = Client::connect(&server.name).await;
+    assert_eq!(client.next().await, None);
+}
+
+#[tokio::test]
+async fn clients_beyond_the_limit_are_closed_and_the_others_keep_working() {
+    let server = start_with(Limits {
+        max_clients: 2,
+        ..Limits::default()
+    });
+    let mut first = Client::greeted(&server.name).await;
+    let _second = Client::greeted(&server.name).await;
+    let mut third = Client::connect(&server.name).await;
+    assert_eq!(third.next().await, None);
+
+    first.send(2, Request::Ping).await;
+    assert_eq!(first.response(2).await, Response::Pong);
 }

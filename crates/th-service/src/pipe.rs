@@ -1,7 +1,7 @@
 //! The named pipe the UI talks to, `\\.\pipe\tunnelhop` — SPEC §2.2 and §6.
 //!
 //! Everything arriving here is untrusted. A connection must open with `Hello` within
-//! [`HELLO_TIMEOUT`]; after that every request is validated before the [`Handler`] sees it.
+//! [`Limits::hello_timeout`]; after that every request is validated before the [`Handler`] sees it.
 //! A line that is too large or does not parse closes the connection, since there is no request
 //! id to answer it by.
 
@@ -28,10 +28,24 @@ pub const PIPE_NAME: &str = r"\\.\pipe\tunnelhop";
 /// Clients must therefore ask for exactly these rights rather than `GENERIC_WRITE`: see
 /// [`connect`].
 pub const PIPE_SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x12019b;;;IU)";
-/// How long a new connection may take to say `Hello`.
-pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
-/// Connections served at once; more are closed straight away.
-pub const MAX_CLIENTS: usize = 16;
+
+/// What the pipe allows a client. The defaults are the service's; tests shorten them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// How long a new connection may take to say `Hello`.
+    pub hello_timeout: Duration,
+    /// Connections served at once; more are closed straight away.
+    pub max_clients: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            hello_timeout: Duration::from_secs(10),
+            max_clients: 16,
+        }
+    }
+}
 
 const READ_CHUNK: usize = 64 * 1024;
 /// Bytes a client may send before its `Hello` is complete. A `Hello` is a few dozen; the
@@ -83,6 +97,7 @@ pub struct Listener {
     name: String,
     descriptor: SecurityDescriptor,
     next: NamedPipeServer,
+    limits: Limits,
 }
 
 impl Listener {
@@ -96,7 +111,13 @@ impl Listener {
             name: name.to_string(),
             descriptor,
             next,
+            limits: Limits::default(),
         })
+    }
+
+    pub fn with_limits(mut self, limits: Limits) -> Listener {
+        self.limits = limits;
+        self
     }
 
     /// The instance waiting for the next client.
@@ -112,7 +133,8 @@ impl Listener {
         events: broadcast::Sender<Event>,
         shutdown: impl Future<Output = ()>,
     ) -> io::Result<()> {
-        let slots = Arc::new(Semaphore::new(MAX_CLIENTS));
+        let limits = self.limits;
+        let slots = Arc::new(Semaphore::new(limits.max_clients));
         tokio::pin!(shutdown);
         loop {
             tokio::select! {
@@ -127,12 +149,15 @@ impl Listener {
                         continue;
                     }
                     let Ok(slot) = slots.clone().try_acquire_owned() else {
-                        log::warn!("more than {MAX_CLIENTS} pipe clients; closing the newest");
+                        log::warn!(
+                            "more than {} pipe clients; closing the newest",
+                            limits.max_clients
+                        );
                         continue;
                     };
                     let (handler, events) = (handler.clone(), events.subscribe());
                     tokio::spawn(async move {
-                        session(pipe, &*handler, events).await;
+                        session(pipe, &*handler, events, limits).await;
                         drop(slot);
                     });
                 }
@@ -158,7 +183,7 @@ enum End {
 }
 
 /// One client, from `Hello` to disconnect.
-async fn session<S, H>(pipe: S, handler: &H, mut events: broadcast::Receiver<Event>)
+async fn session<S, H>(pipe: S, handler: &H, mut events: broadcast::Receiver<Event>, limits: Limits)
 where
     S: AsyncRead + AsyncWrite,
     H: Handler,
@@ -168,7 +193,7 @@ where
     let mut chunk = vec![0u8; READ_CHUNK];
 
     let hello = tokio::time::timeout(
-        HELLO_TIMEOUT,
+        limits.hello_timeout,
         next_message(&mut reader, &mut frames, &mut chunk, HELLO_MAX_BYTES),
     )
     .await;
