@@ -91,6 +91,7 @@ mod driver {
     use tokio::sync::{broadcast, oneshot};
     use tokio::task::JoinHandle;
     use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+    use zeroize::Zeroizing;
 
     use super::{PortOwner, arguments, management_password, port_owner};
     use crate::drivers::ovpn_mgmt::{Management, ManagementError, Notification, State};
@@ -271,11 +272,8 @@ mod driver {
             };
             let password = Secret::new(management_password());
             let password_path = self.password_path(tunnel);
-            write_atomic(
-                &password_path,
-                format!("{}\n", password.expose()).as_bytes(),
-            )
-            .map_err(|e| {
+            let line = Zeroizing::new(format!("{}\n", password.expose()));
+            write_atomic(&password_path, line.as_bytes()).map_err(|e| {
                 abandon(failed(
                     format!("cannot write {}", password_path.display()),
                     e,
