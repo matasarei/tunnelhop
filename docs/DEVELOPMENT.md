@@ -140,22 +140,24 @@ The switch has no DHCP, so each VM gets a static address, gateway 192.168.77.1, 
 
 A small Debian or Ubuntu Server VM: Generation 2, 2 GB RAM, 16 GB disk, switch `th-lab`,
 address 192.168.77.10. Turn off Secure Boot for Linux (`Set-VMFirmware -VMName th-servers
--EnableSecureBoot Off`) and install Docker and SSH in it. Step 12 adds `test-infra/` to the
-repo; it runs there with `docker compose up -d` and provides:
+-EnableSecureBoot Off`) and install Docker and SSH in it. Copy `test-infra/` in and follow its
+[README](../test-infra/README.md): `docker compose run --rm gen`, then `docker compose up -d`.
+It provides:
 
-- **two WireGuard servers and one OpenVPN server**, each with its own tunnel subnet, so a
-  rotation between them really changes the client's address;
-- **a "what's my IP" HTTP endpoint** on each server's tunnel-side address. It answers with the
-  client's source address and is reachable only through that tunnel;
-- **a script that writes matching client configs** into `test-infra/out/` (gitignored), which
-  are then zipped into a test bundle.
+- **two WireGuard servers and one OpenVPN server**, each with its own tunnel subnet and each
+  NATing out through its own address, so a rotation between them really changes the address
+  the outside sees;
+- **one "what's my IP" endpoint, `http://192.168.77.10:8080/`**, answering with the caller's
+  source address;
+- **a generator** that writes fresh keys and matching client configs into `test-infra/out/`
+  (gitignored), to be copied into `th-test` and zipped into test bundles.
 
 **Why the endpoint matters.** Both VMs reach the internet through the PC's NAT, so any public
 "what's my IP" service would see the same address with or without the tunnel. The engine's
 check that the IP changed (and differs from the ISP address) would then always fail. In
-tests the service's probe URLs point at these endpoints instead: before connecting, the probe
-sees `192.168.77.20`; through tunnel A it sees A's client address, and so on. Step 14 makes the
-probe URLs configurable for exactly this.
+tests the service's probe URLs point at this endpoint instead: with no tunnel it sees
+`192.168.77.20`, and through each tunnel it sees that server's own NAT address (`172.31.77.11`,
+`.12`, `.13`). Step 14 makes the probe URLs configurable for exactly this.
 
 ## 5. Day-to-day workflow
 
@@ -174,8 +176,17 @@ Copy-Item -ToSession $vm <that path> -Destination C:\th\wg_live.exe -Force
 Invoke-Command -Session $vm { C:\th\wg_live.exe --ignored --nocapture }
 ```
 
-Step 12 wraps this in `scripts/vm.ps1` (build, copy, run, checkpoint, restore) so it's one
-command per test.
+`scripts/vm.ps1` wraps this so it's one command each. It also creates `C:\th` in the VM and
+locks it to SYSTEM and Administrators:
+
+```powershell
+scripts\vm.ps1 checkpoint before-wg                 # before every risky run
+scripts\vm.ps1 copy                                 # release th-service.exe to C:\th
+scripts\vm.ps1 configs <path to test-infra\out>     # client configs to C:\th\configs
+scripts\vm.ps1 test wg_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.conf' }
+scripts\vm.ps1 run 'C:\th\th-service.exe disengage'
+scripts\vm.ps1 restore before-wg
+```
 
 **Checkpoints:**
 

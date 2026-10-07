@@ -1,0 +1,73 @@
+# TunnelHop test servers, run in the th-servers VM (192.168.77.10). See README.md.
+#
+#   docker compose run --rm gen     # once: keys, server configs (data/) and client configs (out/)
+#   docker compose up -d            # the servers
+#
+# Each server NATs its tunnel out through its own fixed address on the `lab` network, so the
+# "what's my IP" endpoint on the VM's own address tells the tunnels apart.
+
+x-server: &server
+  build: .
+  cap_add: [NET_ADMIN]
+  sysctls:
+    net.ipv4.ip_forward: "1"
+  restart: unless-stopped
+
+services:
+  wg-a:
+    <<: *server
+    command: [wg]
+    environment:
+      TUNNEL_ADDRESS: 10.77.1.1/24
+      TUNNEL_SUBNET: 10.77.1.0/24
+    volumes: ["./data/wg-a:/data:ro"]
+    ports: ["51820:51820/udp"]
+    networks:
+      lab: { ipv4_address: 172.31.77.11 }
+
+  wg-b:
+    <<: *server
+    command: [wg]
+    environment:
+      TUNNEL_ADDRESS: 10.77.2.1/24
+      TUNNEL_SUBNET: 10.77.2.0/24
+    volumes: ["./data/wg-b:/data:ro"]
+    ports: ["51821:51821/udp"]
+    networks:
+      lab: { ipv4_address: 172.31.77.12 }
+
+  ovpn:
+    <<: *server
+    command: [ovpn]
+    environment:
+      TUNNEL_SUBNET: 10.77.3.0/24
+    devices: ["/dev/net/tun:/dev/net/tun"]
+    volumes: ["./data/ovpn:/data:ro"]
+    ports: ["1194:1194/udp"]
+    networks:
+      lab: { ipv4_address: 172.31.77.13 }
+
+  # Answers every request with the caller's source address. On the host network so it sees
+  # the real source: the test VM's own address without a tunnel, a server's lab address through
+  # one.
+  whatsmyip:
+    build: .
+    command: [whatsmyip]
+    network_mode: host
+    restart: unless-stopped
+
+  gen:
+    build: .
+    entrypoint: [/usr/local/bin/gen.sh]
+    environment:
+      SERVER_ADDRESS: ${SERVER_ADDRESS:-192.168.77.10}
+      FORCE: ${FORCE:-0}
+    volumes: ["./:/infra"]
+    profiles: [gen]
+    network_mode: none
+
+networks:
+  lab:
+    ipam:
+      config:
+        - subnet: 172.31.77.0/24

@@ -177,6 +177,10 @@ step (or per closely related pair), opened as a PR against `main`.
     - Test: unit tests for the config-copy `Endpoint` rewrite. In the test VM:
       `cargo test -p th-service --test wg_live -- --ignored` against the servers VM
       (connect, service RUNNING, disconnect, service gone).
+    - **Landed (2026-10-07), live check pending:** `drivers/wireguard.rs`, `tests/wg_live.rs`,
+      `test-infra/` (Dockerfile, compose, `gen.sh`, `server.sh`, `whatsmyip.py`) and
+      `scripts/vm.ps1`. The unit tests pass on the PC. Not yet run: the test servers (no
+      `th-servers` VM, and Docker isn't running on the PC) and `wg_live` (no `th-test`).
 
 ### M3: kill-switch + live rotation (test VM only)
 13. [ ] The WFP kill-switch: engage, allow/revoke interface, disengage and reconcile, all
@@ -330,6 +334,16 @@ Implementation rulings worth knowing (full text in the commit bodies):
 - **`disengage`** is a no-op until step 13 gives it a kill-switch to remove.
 - **`install` registers the executable where it is.** It must sit in a directory only
   administrators can write (Program Files; `C:\th` in the VM is locked down for this).
+- **Our tunnels (step 12):** `tunnel_name::is_ours` accepts exactly the generated shape, `th-`
+  and 12 lowercase hex characters. The prefix alone would have claimed a user's `th-home`.
+- **WireGuard endpoints (step 12):** the copy in `tunnels\` has each peer's `Endpoint`
+  rewritten to the resolved address, peers in file order. A count mismatch is an error.
+  `reconcile` reads the endpoints back from that copy and leaves `profile_id` empty; the
+  orchestrator maps the tunnel name back to a profile.
+- **One probe endpoint in the lab (step 12):** instead of one "what's my IP" per tunnel,
+  `http://192.168.77.10:8080/` answers with the caller's address. Each test server NATs out
+  through its own address, so that one URL tells "no tunnel" (`192.168.77.20`) from each
+  tunnel, as a public service would.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -343,4 +357,7 @@ Still open:
 - **2026-10-07:** the Windows PC is set up (Rust 1.99, Build Tools, Hyper-V access without
   elevation). Step 10's code and step 26 landed on `feature/service-shell`; 130 tests pass
   on Windows. The `th-test` VM doesn't exist yet, so step 10's VM check is pending.
-- **Next:** build `th-test` (DEVELOPMENT.md §2–3), run step 10's VM check, then step 11.
+- **2026-10-07:** step 11 is in PR #7. Step 12's code landed on `feature/wireguard-driver`;
+  its live test waits for both VMs.
+- **Next:** build `th-test` and `th-servers` (DEVELOPMENT.md §2–4). Then run step 10's VM
+  check, start the test servers, and run `wg_live`.
