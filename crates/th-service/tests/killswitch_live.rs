@@ -224,6 +224,10 @@ fn helper_engage_then_abort() {
 fn filters_outlive_a_crashed_process() {
     let _lift = start();
     let internet = addr("example.com:443");
+    assert!(
+        reachable(internet),
+        "the internet is reachable before the crash"
+    );
     let status = std::process::Command::new(std::env::current_exe().unwrap())
         .args([
             "helper_engage_then_abort",
