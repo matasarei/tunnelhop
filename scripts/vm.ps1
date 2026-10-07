@@ -147,7 +147,13 @@ switch ($Action) {
                 $log = "$exe.log"; $exit = "$exe.exit"; $script = "$exe.cmd"
                 Remove-Item $log, $exit -ErrorAction SilentlyContinue
                 $lines = @('@echo off')
-                foreach ($key in $variables.Keys) { $lines += "set `"$key=$($variables[$key])`"" }
+                foreach ($key in $variables.Keys) {
+                    # The values go into a .cmd file verbatim: refuse what cmd would read as syntax.
+                    if ("$key$($variables[$key])" -match '["%^!&|<>\r\n]') {
+                        throw "-Env $key holds a character cmd would misread; use a plain value"
+                    }
+                    $lines += "set `"$key=$($variables[$key])`""
+                }
                 $lines += "`"$exe`" $arguments > `"$log`" 2>&1"
                 $lines += "echo %ERRORLEVEL% > `"$exit`""
                 Set-Content -Path $script -Value $lines -Encoding ASCII
