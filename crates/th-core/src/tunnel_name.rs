@@ -17,9 +17,16 @@ pub fn tunnel_name(bundle: &BundleId, profile_id: &str) -> String {
     format!("{PREFIX}{}", &hex[..HASH_CHARS])
 }
 
-/// Whether this app created the tunnel; tunnels without the prefix belong to the user.
+/// Whether this app created the tunnel: exactly the shape [`tunnel_name`] produces, `th-` and
+/// 12 lowercase hex characters. A user's own tunnel that merely starts with `th-` (`th-home`)
+/// is not ours, and neither is anything else.
 pub fn is_ours(name: &str) -> bool {
-    name.starts_with(PREFIX) && is_valid_wireguard_name(name)
+    name.strip_prefix(PREFIX).is_some_and(|hash| {
+        hash.len() == HASH_CHARS
+            && hash
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    })
 }
 
 /// WireGuard for Windows' rule: `^[a-zA-Z0-9_=+.-]{1,32}$`, no reserved DOS device name
@@ -115,6 +122,23 @@ mod tests {
             assert!(!is_dos_device_name(fine), "{fine}");
         }
         assert!(!is_ours("wg0"), "user tunnels are never ours");
+    }
+
+    #[test]
+    fn only_the_generated_shape_is_ours() {
+        assert!(is_ours("th-0123456789ab"));
+        for name in [
+            "th-",
+            "th-home",
+            "th-0123456789a",
+            "th-0123456789abc",
+            "th-0123456789AB",
+            "TH-0123456789ab",
+            "th-0123456789ag",
+            "xth-0123456789ab",
+        ] {
+            assert!(!is_ours(name), "{name}");
+        }
     }
 
     proptest! {
