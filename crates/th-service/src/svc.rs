@@ -55,11 +55,22 @@ pub fn describe(error: &dyn Error) -> String {
     text
 }
 
+/// Why the service stops.
+#[derive(Debug)]
+enum Stop {
+    /// The SCM asked (STOP or PRESHUTDOWN).
+    Control(ServiceControl),
+    /// Something the service cannot run without broke; exit with an error so the SCM's
+    /// restart-on-failure actions apply.
+    Failed(String),
+}
+
 fn run_service() -> Result<(), Box<dyn Error>> {
     let (stop_tx, stop_rx) = mpsc::channel();
+    let failures = stop_tx.clone();
     let handler = move |control| match control {
         ServiceControl::Stop | ServiceControl::Preshutdown => {
-            let _ = stop_tx.send(control);
+            let _ = stop_tx.send(Stop::Control(control));
             ServiceControlHandlerResult::NoError
         }
         ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
@@ -84,7 +95,7 @@ fn run_service() -> Result<(), Box<dyn Error>> {
         Duration::from_secs(10),
     )?;
 
-    let running = match start() {
+    let running = match start(failures) {
         Ok(running) => running,
         Err(e) => {
             // The SCM records the code; the log, if it could be opened, has the reason.
@@ -107,7 +118,9 @@ fn run_service() -> Result<(), Box<dyn Error>> {
     )?;
     log::info!("running");
 
-    let control = stop_rx.recv().unwrap_or(ServiceControl::Stop);
+    let reason = stop_rx
+        .recv()
+        .unwrap_or(Stop::Control(ServiceControl::Stop));
     report(
         ServiceState::StopPending,
         ServiceControlAccept::empty(),
@@ -115,12 +128,21 @@ fn run_service() -> Result<(), Box<dyn Error>> {
         Duration::from_secs(20),
     )?;
     // From step 13 on: disconnect the tunnel and disengage the kill-switch here.
-    log::info!("stopping ({control:?})");
+    let exit_code = match &reason {
+        Stop::Control(control) => {
+            log::info!("stopping ({control:?})");
+            ServiceExitCode::Win32(0)
+        }
+        Stop::Failed(why) => {
+            log::error!("stopping after a failure: {why}");
+            ServiceExitCode::ServiceSpecific(2)
+        }
+    };
     running.stop();
     report(
         ServiceState::Stopped,
         ServiceControlAccept::empty(),
-        ServiceExitCode::Win32(0),
+        exit_code,
         Duration::ZERO,
     )?;
     Ok(())
@@ -173,8 +195,9 @@ impl Handler for ShellHandler {
     }
 }
 
-/// Prepare the store, open the log, look at what is installed, and open the pipe.
-fn start() -> Result<Running, Box<dyn Error>> {
+/// Prepare the store, open the log, look at what is installed, and open the pipe. A pipe that
+/// fails later is reported on `failures`: a service nobody can reach must not look healthy.
+fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
     let layout = Layout::system()?;
     store::prepare(&layout)?;
     logging::to_file(&layout.logs())?;
@@ -214,9 +237,19 @@ fn start() -> Result<Running, Box<dyn Error>> {
     });
     let (events, _) = broadcast::channel(64);
     let (stop_pipe, stopped) = oneshot::channel();
-    let pipe = runtime.spawn(listener.serve(handler, events, async {
+    let server = runtime.spawn(listener.serve(handler, events, async {
         let _ = stopped.await;
     }));
+    let pipe = runtime.spawn(async move {
+        let result = match server.await {
+            Ok(result) => result,
+            Err(e) => Err(std::io::Error::other(format!("panicked: {e}"))),
+        };
+        if let Err(e) = &result {
+            let _ = failures.send(Stop::Failed(format!("the pipe server failed: {e}")));
+        }
+        result
+    });
     log::info!("listening on {PIPE_NAME}");
     Ok(Running {
         runtime,
@@ -259,6 +292,9 @@ pub fn install() -> Result<(), Box<dyn Error>> {
         command: None,
         actions: Some(vec![restart.clone(), restart.clone(), restart]),
     })?;
+    // Also restart after the service stops itself with an error (Stop::Failed), not only after
+    // a crash.
+    service.set_failure_actions_on_non_crash_failures(true)?;
     service.start::<&str>(&[])?;
     log::info!("installed and started {SERVICE_NAME}");
     Ok(())
