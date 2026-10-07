@@ -23,6 +23,15 @@ fn in_test_vm() {
     );
 }
 
+/// `route print -4`, as text.
+fn ipv4_routes() -> String {
+    let output = std::process::Command::new("route")
+        .args(["print", "-4"])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 /// A free port on localhost, found by binding and releasing it.
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -93,6 +102,13 @@ async fn the_real_openvpn_goes_from_hold_to_connected_and_exits_on_sigterm() {
     assert_eq!(connected.detail, "SUCCESS");
     let ip = connected.local_ip.expect("a tunnel address");
     assert!(ip.to_string().starts_with("10.77.3."), "{ip}");
+    // The pushed redirect-gateway routes through the server end, so its absence later means
+    // OpenVPN removed it rather than never added it.
+    let routes = ipv4_routes();
+    assert!(
+        routes.contains("10.77.3.1"),
+        "no route through the tunnel while connected:\n{routes}"
+    );
 
     management.sigterm().await.expect("SIGTERM accepted");
     timeout(Duration::from_secs(15), child.wait())
@@ -101,11 +117,7 @@ async fn the_real_openvpn_goes_from_hold_to_connected_and_exits_on_sigterm() {
         .unwrap();
 
     // Unlike a killed openvpn.exe, one that exits on SIGTERM removes its routes.
-    let routes = std::process::Command::new("route")
-        .args(["print", "-4"])
-        .output()
-        .unwrap();
-    let routes = String::from_utf8_lossy(&routes.stdout);
+    let routes = ipv4_routes();
     assert!(
         !routes.contains("10.77.3.1"),
         "a route through the closed tunnel is left:\n{routes}"
