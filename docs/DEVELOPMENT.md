@@ -243,26 +243,33 @@ Restore-VMCheckpoint -VMName th-test -Name clean -Confirm:$false  # back to a fr
 
 ## 6. The leak test (steps 14 and 16)
 
-Inside `th-test`, with the service installed and a test bundle imported:
+With the service installed in `th-test`, a test bundle imported and selected, the test servers
+up, and Docker Desktop running on the PC:
 
 ```powershell
-pktmon start --capture --comp nics --file-name C:\th\leak.etl
-# 20 × "Rotate Now" (through the pipe; step 14 adds a small CLI for this)
-pktmon stop
-pktmon etl2pcap C:\th\leak.etl --out C:\th\leak.pcapng
+# In the VM, once: install, point the probe at the lab, import and select a bundle.
+scripts\vm.ps1 run 'C:\th\th-service.exe install'
+scripts\vm.ps1 run 'Set-Content C:\ProgramData\TunnelHop\settings.json ''{ "probe_urls": ["http://198.18.77.2:8080/"] }'' -Encoding ASCII; Restart-Service TunnelHop'
+scripts\vm.ps1 run 'C:\th\th-service.exe ctl import C:\th\configs\bundle-wg.zip'   # prints the bundle id
+scripts\vm.ps1 run 'C:\th\th-service.exe ctl select <bundle id>'
+
+scripts\leak-test.ps1          # 20 rotations through `th-service ctl rotate`, then the analysis
 ```
 
-Copy `leak.pcapng` to the PC (`Copy-Item -FromSession $vm …`) and filter out the allowed
-traffic:
+The script captures with `pktmon` during the rotations, copies the capture to the PC, and reads
+it with `tshark` in a throwaway `nicolaka/netshoot` container (no Wireshark install needed).
+**"sent by the VM, not allowed" must be 0.** Three things it gets right that a quick capture
+gets wrong:
 
-```powershell
-& "C:\Program Files\Wireshark\tshark.exe" -r leak.pcapng `
-  -Y "not (ip.addr==192.168.77.1 and udp.port in {41820 41821 1194}) and not dhcp and not dhcpv6 and not (icmpv6.type >= 133 and icmpv6.type <= 137)"
-```
-
-The expected output is **empty**. Anything listed is a leak. The filter allows only the VPN
-ports on 192.168.77.1, not the whole address: that address is also the VM's gateway, so
-anything else sent to it is a leak too.
+- **Only the physical adapter** (the `Microsoft NetVsc Nic` group in `pktmon list`). With
+  `--comp nics`, pktmon also records the tunnel adapters, whose packets are the traffic *inside*
+  the tunnel, written as if they were Ethernet, so they decode as garbage.
+- **Only frames the VM sends count.** pktmon captures at the adapter, before the firewall, so a
+  packet arriving from outside appears whether or not it is let in. The script lists those
+  separately. In practice they are the odd TCP reset from a server Windows talked to before the
+  tunnel came up, sent to the VM's real address: noise, not a leak.
+- **The VPN permit names ports, not the whole address**: 192.168.77.1 is also the VM's gateway,
+  so anything else sent to it is a leak.
 
 ## Safety rules
 
