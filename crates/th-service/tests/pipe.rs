@@ -257,3 +257,33 @@ async fn connect_refuses_a_pipe_a_standard_user_could_have_created() {
         assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
     }
 }
+
+#[tokio::test]
+async fn a_client_that_has_not_said_hello_cannot_send_much() {
+    let server = start();
+    let mut client = Client::connect(&server.name).await;
+    client.send_raw(&[b'x'; 5000]).await;
+    assert_eq!(client.next().await, None, "the server kept reading");
+}
+
+#[tokio::test]
+async fn a_hello_and_a_request_sent_together_both_count() {
+    let server = start();
+    let mut client = Client::connect(&server.name).await;
+    let mut both = ipc::encode(&ClientMessage {
+        id: 1,
+        request: Request::Hello {
+            version: PROTOCOL_VERSION,
+        },
+    });
+    both.extend(ipc::encode(&ClientMessage {
+        id: 2,
+        request: Request::Ping,
+    }));
+    client.send_raw(&both).await;
+    assert_eq!(
+        client.response(1).await,
+        ipc::check_version(PROTOCOL_VERSION).unwrap()
+    );
+    assert_eq!(client.response(2).await, Response::Pong);
+}

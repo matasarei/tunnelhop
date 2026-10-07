@@ -34,6 +34,9 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 pub const MAX_CLIENTS: usize = 16;
 
 const READ_CHUNK: usize = 64 * 1024;
+/// Bytes a client may send before its `Hello` is complete. A `Hello` is a few dozen; the
+/// 27 MB a later `ImportBundle` may take is not on offer to a client that has not greeted.
+const HELLO_MAX_BYTES: usize = 4 * 1024;
 
 /// Open a client end of the service's pipe, refusing a server that SYSTEM or Administrators do
 /// not own. While the service is stopped any user can create a pipe under its name; without this
@@ -166,7 +169,7 @@ where
 
     let hello = tokio::time::timeout(
         HELLO_TIMEOUT,
-        next_message(&mut reader, &mut frames, &mut chunk),
+        next_message(&mut reader, &mut frames, &mut chunk, HELLO_MAX_BYTES),
     )
     .await;
     let hello = match hello {
@@ -193,7 +196,7 @@ where
     let mut events_open = true;
     loop {
         let outgoing = tokio::select! {
-            message = next_message(&mut reader, &mut frames, &mut chunk) => match message {
+            message = next_message(&mut reader, &mut frames, &mut chunk, usize::MAX) => match message {
                 Ok(message) => response(message.id, respond(handler, message.request).await),
                 Err(End::Closed) => return,
                 Err(End::Broken(why)) => return log::warn!("pipe client dropped: {why}"),
@@ -237,12 +240,15 @@ fn response(id: u64, response: Response) -> ServerMessage {
     ServerMessage::Response { id, response }
 }
 
-/// The next complete message. Cancel-safe: bytes already read stay in `frames`.
+/// The next complete message, reading at most `budget` bytes for it. Cancel-safe: bytes already
+/// read stay in `frames`.
 async fn next_message<R: AsyncRead + Unpin>(
     reader: &mut R,
     frames: &mut FrameBuffer,
     chunk: &mut [u8],
+    budget: usize,
 ) -> Result<ClientMessage, End> {
+    let mut taken = 0usize;
     loop {
         match frames.next_frame() {
             Ok(Some(line)) => {
@@ -251,9 +257,18 @@ async fn next_message<R: AsyncRead + Unpin>(
             Ok(None) => {}
             Err(e) => return Err(End::Broken(e.to_string())),
         }
-        match reader.read(chunk).await {
+        let room = budget.saturating_sub(taken).min(chunk.len());
+        if room == 0 {
+            return Err(End::Broken(format!(
+                "more than {budget} bytes without a message"
+            )));
+        }
+        match reader.read(&mut chunk[..room]).await {
             Ok(0) => return Err(End::Closed),
-            Ok(n) => frames.push(&chunk[..n]),
+            Ok(n) => {
+                taken += n;
+                frames.push(&chunk[..n]);
+            }
             Err(e) => return Err(End::Broken(e.to_string())),
         }
     }
