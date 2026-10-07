@@ -606,8 +606,10 @@ pub fn services_with_prefix(prefix: &str) -> io::Result<Vec<String>> {
             break Ok(names);
         }
         if count == 0 {
-            // Not even one entry fitted: grow to what the SCM asked for.
-            buffer.resize((needed as usize).div_ceil(8) + 1, 0);
+            // Not even one entry fitted: grow to what the SCM asked for, and at least double,
+            // so a `needed` that is no larger than the buffer cannot repeat the same call forever.
+            let wanted = (needed as usize).div_ceil(8) + 1;
+            buffer.resize(wanted.max(buffer.len() * 2), 0);
         }
     };
     // SAFETY: the handle came from OpenSCManagerW above.
