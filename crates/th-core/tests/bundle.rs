@@ -84,6 +84,30 @@ fn reimporting_the_same_zip_is_a_no_op() {
 }
 
 #[test]
+fn an_installed_bundle_opens_as_a_repeated_import_would() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("bundles");
+    let bytes = valid_bundle(vec![]);
+    let imported = bundle::import(&bytes, &root).unwrap();
+
+    let opened = bundle::open(&root, &imported.id).unwrap();
+    assert_eq!(opened.id, imported.id);
+    assert_eq!(opened.dir, imported.dir);
+    assert_eq!(opened.manifest, imported.manifest);
+    assert_eq!(opened.endpoints, imported.endpoints);
+    assert_eq!(opened.needs_credentials, imported.needs_credentials);
+    assert!(opened.already_present);
+    assert!(opened.credentials.is_empty());
+}
+
+#[test]
+fn opening_a_bundle_that_is_not_installed_is_an_error() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = BundleId::parse("0123456789abcdef").unwrap();
+    assert!(bundle::open(tmp.path(), &missing).is_err());
+}
+
+#[test]
 fn different_zips_get_different_ids() {
     let a = valid_bundle(vec![]);
     let b = valid_bundle(vec![Entry::File("openvpn/extra.txt", b"x".to_vec())]);
