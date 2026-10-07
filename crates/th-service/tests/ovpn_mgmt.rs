@@ -123,12 +123,12 @@ async fn a_connection_goes_from_hold_to_connected() {
     assert_eq!(
         seen,
         [
-            "hold",
             r#"Other("WAIT")"#,
             r#"Other("AUTH")"#,
             r#"Other("ASSIGN_IP")"#
         ],
-        "every notification, in order, none lost to a command's answer"
+        "every notification in order, none lost to a command's answer, and not the hold that \
+         start() released: answering it again races OpenVPN's credential prompt"
     );
     drop(management);
     server.await.unwrap();
