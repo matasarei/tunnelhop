@@ -261,7 +261,7 @@ step (or per closely related pair), opened as a PR against `main`.
       `tests/ovpn_mgmt_live.rs`, run in `th-test` against the real OpenVPN 2.7.7 and the lab
       server: login, hold release, CONNECTED with a `10.77.3.x` address in about a second,
       then SIGTERM, a clean exit within 15 s, and no route left behind.
-16. [ ] OpenvpnDriver: random port and password file, Job Object spawn, credentials from
+16. [x] OpenvpnDriver: random port and password file, Job Object spawn, credentials from
     DPAPI, the teardown timeout, and reconnect grace.
     - Create: `crates/th-service/src/drivers/openvpn.rs`
     - Modify: `crates/th-service/src/orchestrator.rs` (register the driver by protocol)
@@ -275,6 +275,27 @@ step (or per closely related pair), opened as a PR against `main`.
       bind it first and pose as OpenVPN, and the client would then hand it the VPN credentials
       when it asks. Before connecting, check that the listening socket on that port belongs to
       the `openvpn.exe` the driver started (`GetExtendedTcpTable` gives the owning process).
+    - **Landed (2026-10-07):**
+      - `drivers/openvpn.rs`, registered in `svc.rs`. The orchestrator already picks drivers by
+        protocol, so it needed no change.
+      - `rewrite_remotes`/`installed_remotes` in th-core's OpenVPN sanitizer.
+      - Job, resume, listener-owner, address, interface and route helpers in `win.rs`.
+      - `tests/ovpn_live.rs`: connect and disconnect; credentials (none, wrong, right with a
+        quote and a backslash); the crash cleanup. Passed three runs in a row from a restored VM.
+      - The lab server now checks `th-test-user` but still admits certificate-only clients.
+      - The mixed leak test: 20 rotations, public IPs `.11` ×8, `.12` ×7, `.13` ×5, and
+        **0 frames sent by the VM outside the tunnel**.
+    - **Found along the way:**
+      - A second `hold release` raced OpenVPN's credential prompt; `start()` now consumes the
+        startup hold.
+      - CONNECTED arrives while the tunnel address is still tentative (about 2 s), so the
+        driver waits until it is usable.
+      - Step 14's `Running::stop` panicked on every service stop ("no reactor running"), so
+        the service never disconnected or lifted the block before exiting; the SCM restarted
+        it. Fixed, and panics are now logged.
+    - **Correction to step 12's note:** with the data-channel-offload adapter, a killed OpenVPN's
+      `0.0.0.0/1` and `128.0.0.0/1` go with the adapter. What stays is the host route to the
+      server, on the physical interface. The crash test asserts exactly that.
 
 ### M5: UI + installer
 17. [ ] The Tauri app shell: pipe client, tray menu, close-to-tray, and autostart.
@@ -462,6 +483,15 @@ Implementation rulings worth knowing (full text in the commit bodies):
   management password is refused as not ours. An error from a command names only the command's
   first word, since the rest can be a credential. Credentials are double-quoted with `\` and `"`
   escaped; line breaks are already refused at the IPC layer.
+- **OpenVPN driver (step 16):**
+  - OpenVPN tunnels are never adopted after a restart: the job kills `openvpn.exe` with the
+    service, so none can still be up. `reconcile` only clears what a killed one left: the
+    host route to its server, any manually added routes on its adapter, and its files.
+  - Routes on the adapter are cleared only while the adapter is down. One that is up again
+    carries another OpenVPN, perhaps the user's own.
+  - `--log <logs>\openvpn-<tunnel>.log` is added to SPEC §4.3's command line, so a failure
+    can be read in OpenVPN's own words.
+  - Only the `Auth` realm is answered; a private-key passphrase prompt fails the connect.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -484,4 +514,7 @@ Still open:
 - **2026-10-07:** step 14 merged (PR #10). Step 15, the OpenVPN management client, landed on
   `feature/ovpn-management`, checked against transcripts and against the real OpenVPN in
   `th-test`.
-- **Next:** step 16, the OpenVPN driver and the mixed-protocol leak test.
+- **2026-10-07:** step 15 merged (PR #11). Step 16, the OpenVPN driver, landed on
+  `feature/openvpn-driver`: OpenVPN rotates end to end in `th-test`, and the mixed-protocol
+  leak test passes. Also fixed: service stop (a step-14 bug).
+- **Next:** step 17, the Tauri app shell.

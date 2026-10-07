@@ -228,7 +228,19 @@ scripts\vm.ps1 test killswitch_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.c
 scripts\vm.ps1 test killswitch_live -Features dev-safety -Env @{ TH_DEV_SAFETY_SECONDS = '3' }
 scripts\vm.ps1 run 'C:\th\th-service.exe disengage'
 scripts\vm.ps1 restore before-wg
+scripts\vm.ps1 test ovpn_live                       # the OpenVPN driver (step 16)
 ```
+
+- **Take the checkpoint after `configs`**, not before: restoring it otherwise brings back the
+  previous configs, and after `gen.sh` has run again their certificates no longer match the
+  server. The failure is only a TLS timeout.
+- **`copy` fails while the service runs**: the service runs straight from `C:\th\th-service.exe`
+  and holds it open. Stopping is not enough, because its recovery actions may start it again.
+  Disable it for the copy:
+  `scripts\vm.ps1 run 'Set-Service TunnelHop -StartupType Disabled; Stop-Service TunnelHop'`,
+  then `copy`, then `Set-Service TunnelHop -StartupType Automatic; Start-Service TunnelHop`.
+- `ovpn_live` keeps each test's files under `C:\th\ovpn-live\<test>\`, including OpenVPN's own
+  log in `logs\`, so a failure can be read afterwards.
 
 **Checkpoints:**
 
@@ -248,9 +260,11 @@ up, and Docker Desktop running on the PC:
 
 ```powershell
 # In the VM, once: install, point the probe at the lab, import and select a bundle.
+# Separate calls: right after `install` the service is still starting and refuses a stop.
 scripts\vm.ps1 run 'C:\th\th-service.exe install'
 scripts\vm.ps1 run 'Set-Content C:\ProgramData\TunnelHop\settings.json ''{ "probe_urls": ["http://198.18.77.2:8080/"] }'' -Encoding ASCII; Restart-Service TunnelHop'
-scripts\vm.ps1 run 'C:\th\th-service.exe ctl import C:\th\configs\bundle-wg.zip'   # prints the bundle id
+# bundle-all.zip rotates across WireGuard and OpenVPN (step 16); bundle-wg.zip, WireGuard only.
+scripts\vm.ps1 run 'C:\th\th-service.exe ctl import C:\th\configs\bundle-all.zip'  # prints the bundle id
 scripts\vm.ps1 run 'C:\th\th-service.exe ctl select <bundle id>'
 
 scripts\leak-test.ps1          # 20 rotations through `th-service ctl rotate`, then the analysis
