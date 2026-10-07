@@ -316,3 +316,53 @@ async fn clients_beyond_the_limit_are_closed_and_the_others_keep_working() {
     first.send(2, Request::Ping).await;
     assert_eq!(first.response(2).await, Response::Pong);
 }
+
+#[tokio::test]
+async fn one_logon_session_cannot_take_every_slot() {
+    let server = start_with(Limits {
+        max_clients_per_session: 2,
+        ..Limits::default()
+    });
+    let mut first = Client::greeted(&server.name).await;
+    let second = Client::greeted(&server.name).await;
+    let mut third = Client::connect(&server.name).await;
+    assert_eq!(
+        third.next().await,
+        None,
+        "a third client from this session was served"
+    );
+
+    // A slot frees up once a client has left. Each session holds an events receiver and
+    // gives its slot back as it ends, so the count says when that has happened.
+    drop(second);
+    while server.events.receiver_count() > 1 {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let mut fourth = Client::greeted(&server.name).await;
+    fourth.send(2, Request::Ping).await;
+    assert_eq!(fourth.response(2).await, Response::Pong);
+    first.send(2, Request::Ping).await;
+    assert_eq!(first.response(2).await, Response::Pong);
+}
+
+#[tokio::test]
+async fn a_client_that_stops_reading_is_dropped() {
+    let server = start_with(Limits {
+        write_timeout: Duration::from_millis(200),
+        ..Limits::default()
+    });
+    let _silent = Client::greeted(&server.name).await;
+    // Events far larger than the pipe's buffer, which the client never reads.
+    let alert = Event::Alert {
+        message: "x".repeat(32 * 1024),
+    };
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while server.events.receiver_count() > 0 {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the stalled client was kept"
+        );
+        let _ = server.events.send(alert.clone());
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}

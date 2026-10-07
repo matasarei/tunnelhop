@@ -235,6 +235,20 @@ pub fn open_pipe_client(name: &str) -> io::Result<std::os::windows::io::OwnedHan
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
+/// The Windows logon session of the process at the other end of a connected pipe. Each logged-in
+/// user has their own, so it tells one user's connections from another's.
+pub fn pipe_client_session(pipe: &impl std::os::windows::io::AsHandle) -> io::Result<u32> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::System::Pipes::GetNamedPipeClientSessionId;
+
+    let mut session = 0u32;
+    // SAFETY: the borrow keeps the handle open; the output is a plain u32.
+    if unsafe { GetNamedPipeClientSessionId(pipe.as_handle().as_raw_handle(), &mut session) } == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(session)
+}
+
 /// Whether a kernel object (the server side of a pipe, seen from its client) is owned by
 /// SYSTEM or the Administrators group. A standard user cannot make either the owner of an
 /// object they create.

@@ -5,10 +5,11 @@
 //! A line that is too large or does not parse closes the connection, since there is no request
 //! id to answer it by.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::io;
 use std::os::windows::io::IntoRawHandle;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use th_core::ipc::{self, ClientMessage, Event, FrameBuffer, Request, Response, ServerMessage};
@@ -36,6 +37,13 @@ pub struct Limits {
     pub hello_timeout: Duration,
     /// Connections served at once; more are closed straight away.
     pub max_clients: usize,
+    /// Connections from one Windows logon session. The UI needs one or two; the cap keeps one
+    /// user from taking every slot and locking another user's UI out.
+    pub max_clients_per_session: usize,
+    /// How long writing one message may take before the client is dropped. A client that stops
+    /// reading would otherwise hold its slot forever. Idle readers are fine: the UI waits for
+    /// events for hours.
+    pub write_timeout: Duration,
 }
 
 impl Default for Limits {
@@ -43,6 +51,44 @@ impl Default for Limits {
         Limits {
             hello_timeout: Duration::from_secs(10),
             max_clients: 16,
+            max_clients_per_session: 4,
+            write_timeout: Duration::from_secs(30),
+        }
+    }
+}
+
+/// Counts connections per logon session; a [`SessionSlot`] gives its place back when dropped.
+#[derive(Default)]
+struct Sessions(Mutex<HashMap<u32, usize>>);
+
+struct SessionSlot {
+    sessions: Arc<Sessions>,
+    session: u32,
+}
+
+impl Sessions {
+    fn enter(self: &Arc<Self>, session: u32, limit: usize) -> Option<SessionSlot> {
+        let mut counts = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let count = counts.entry(session).or_default();
+        if *count >= limit {
+            return None;
+        }
+        *count += 1;
+        Some(SessionSlot {
+            sessions: self.clone(),
+            session,
+        })
+    }
+}
+
+impl Drop for SessionSlot {
+    fn drop(&mut self) {
+        let mut counts = self.sessions.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(count) = counts.get_mut(&self.session) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.session);
+            }
         }
     }
 }
@@ -135,6 +181,7 @@ impl Listener {
     ) -> io::Result<()> {
         let limits = self.limits;
         let slots = Arc::new(Semaphore::new(limits.max_clients));
+        let sessions = Arc::new(Sessions::default());
         tokio::pin!(shutdown);
         loop {
             tokio::select! {
@@ -148,6 +195,21 @@ impl Listener {
                         log::warn!("pipe client failed to connect: {e}");
                         continue;
                     }
+                    let logon = match crate::win::pipe_client_session(&pipe) {
+                        Ok(logon) => logon,
+                        Err(e) => {
+                            log::warn!("cannot tell which session a pipe client is in: {e}");
+                            continue;
+                        }
+                    };
+                    let Some(session_slot) = sessions.enter(logon, limits.max_clients_per_session)
+                    else {
+                        log::warn!(
+                            "more than {} pipe clients from session {logon}; closing the newest",
+                            limits.max_clients_per_session
+                        );
+                        continue;
+                    };
                     let Ok(slot) = slots.clone().try_acquire_owned() else {
                         log::warn!(
                             "more than {} pipe clients; closing the newest",
@@ -158,7 +220,7 @@ impl Listener {
                     let (handler, events) = (handler.clone(), events.subscribe());
                     tokio::spawn(async move {
                         session(pipe, &*handler, events, limits).await;
-                        drop(slot);
+                        drop((slot, session_slot));
                     });
                 }
             }
@@ -210,9 +272,13 @@ where
         },
         _ => (error("the first message must be hello"), false),
     };
-    if write(&mut writer, &response(hello.id, greeting))
-        .await
-        .is_err()
+    if write(
+        &mut writer,
+        &response(hello.id, greeting),
+        limits.write_timeout,
+    )
+    .await
+    .is_err()
         || !accepted
     {
         return;
@@ -238,7 +304,10 @@ where
                 }
             },
         };
-        if write(&mut writer, &outgoing).await.is_err() {
+        if write(&mut writer, &outgoing, limits.write_timeout)
+            .await
+            .is_err()
+        {
             return;
         }
     }
@@ -299,9 +368,22 @@ async fn next_message<R: AsyncRead + Unpin>(
     }
 }
 
-async fn write<W: AsyncWrite + Unpin>(writer: &mut W, message: &ServerMessage) -> io::Result<()> {
-    writer.write_all(&ipc::encode(message)).await?;
-    writer.flush().await
+/// Write one message, giving up after `limit`: a client that has stopped reading is dropped.
+async fn write<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    message: &ServerMessage,
+    limit: Duration,
+) -> io::Result<()> {
+    let bytes = ipc::encode(message);
+    let written = tokio::time::timeout(limit, async {
+        writer.write_all(&bytes).await?;
+        writer.flush().await
+    })
+    .await;
+    written.unwrap_or_else(|_| {
+        log::warn!("a pipe client stopped reading; dropping it");
+        Err(io::ErrorKind::TimedOut.into())
+    })
 }
 
 #[cfg(test)]
