@@ -333,9 +333,6 @@ mod driver {
                     return Err(e);
                 }
             };
-            let _ = self.events.send(TunnelEvent::Up {
-                tunnel: tunnel.to_string(),
-            });
             Ok(TunnelHandle {
                 profile_id: profile.profile_id.clone(),
                 protocol: Protocol::Wireguard,
@@ -347,12 +344,10 @@ mod driver {
 
         async fn disconnect(&self, handle: &TunnelHandle) -> Result<(), DriverError> {
             guard(&handle.tunnel_name)?;
-            self.uninstall(&handle.tunnel_name).await?;
-            let _ = self.events.send(TunnelEvent::Down {
-                tunnel: handle.tunnel_name.clone(),
-                reason: "disconnected".into(),
-            });
-            Ok(())
+            // No event: events report what a tunnel did on its own. A `Down` for a disconnect
+            // the engine asked for would read as a lost tunnel once a tunnel with the same name
+            // is back up (a one-profile bundle, `reconnect_same`) and rotate it again.
+            self.uninstall(&handle.tunnel_name).await
         }
 
         async fn status(&self, handle: &TunnelHandle) -> Result<TunnelStatus, DriverError> {
