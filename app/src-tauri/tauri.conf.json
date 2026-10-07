@@ -14,8 +14,10 @@
       {
         "label": "main",
         "title": "TunnelHop",
-        "width": 720,
-        "height": 520,
+        "width": 600,
+        "height": 680,
+        "minWidth": 480,
+        "minHeight": 480,
         "visible": false
       }
     ],

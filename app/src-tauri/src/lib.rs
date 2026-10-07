@@ -109,26 +109,51 @@ mod app {
         }
     }
 
+    /// Disconnect and lift the block, then quit (SPEC §5's Exit). Quits anyway when the service
+    /// cannot be reached or does not answer in time.
+    async fn exit(app: AppHandle) {
+        let client = app.state::<AppState>().client.clone();
+        let shutdown = Request::Shutdown { disconnect: true };
+        match tokio::time::timeout(EXIT_TIMEOUT, client.request(shutdown)).await {
+            Ok(Ok(Response::Error { message })) => {
+                log::warn!("the service could not disconnect: {message}")
+            }
+            Ok(Err(e)) => log::info!("exiting without the service: {e}"),
+            Err(_) => log::warn!("the service did not answer Exit in time"),
+            Ok(Ok(_)) => {}
+        }
+        app.exit(0);
+    }
+
+    /// Send one request; a refusal comes back as its message. On a refusal the tray and the
+    /// window are put back as the last report had them: a switch or a check item flips itself
+    /// on click, before the service has said anything.
+    async fn send(app: &AppHandle, request: Request) -> Result<(), String> {
+        let client = app.state::<AppState>().client.clone();
+        let result = match client.request(request).await {
+            Ok(Response::Error { message }) => Err(message),
+            Ok(_) => Ok(()),
+            Err(e) => Err(e),
+        };
+        if result.is_err() {
+            let report = app
+                .state::<AppState>()
+                .report
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            apply(app, report);
+        }
+        result
+    }
+
     /// Send what a tray click asks for. The tray changes only with the service's next report;
-    /// a refusal is shown, and the tray put back as the last report had it.
+    /// a refusal is shown as a notification.
     fn on_action(app: &AppHandle, action: Action) {
         let request = match action {
             Action::Dashboard => return show_dashboard(app),
             Action::Exit => {
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    let client = app.state::<AppState>().client.clone();
-                    let shutdown = Request::Shutdown { disconnect: true };
-                    match tokio::time::timeout(EXIT_TIMEOUT, client.request(shutdown)).await {
-                        Ok(Ok(Response::Error { message })) => {
-                            log::warn!("the service could not disconnect: {message}")
-                        }
-                        Ok(Err(e)) => log::info!("exiting without the service: {e}"),
-                        Err(_) => log::warn!("the service did not answer Exit in time"),
-                        Ok(Ok(_)) => {}
-                    }
-                    app.exit(0);
-                });
+                tauri::async_runtime::spawn(exit(app.clone()));
                 return;
             }
             Action::Rotate => Request::RotateNow,
@@ -147,24 +172,48 @@ mod app {
         };
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
-            let client = app.state::<AppState>().client.clone();
-            let failure = match client.request(request).await {
-                Ok(Response::Error { message }) => Some(message),
-                Ok(_) => None,
-                Err(e) => Some(e),
-            };
-            if let Some(message) = failure {
+            if let Err(message) = send(&app, request).await {
                 notify(&app, &message);
-                // A check item toggles itself on click: put it back as the service has it.
-                let report = app
-                    .state::<AppState>()
-                    .report
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone();
-                apply(&app, report);
             }
         });
+    }
+
+    /// What the window's controls ask for: the tray's actions, plus Connect.
+    #[derive(Debug, serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+    enum WindowAction {
+        Connect,
+        Rotate,
+        Disconnect,
+        SetAutoRotate { enabled: bool },
+        SetInterval { minutes: u32 },
+        Exit,
+    }
+
+    /// The window's controls. A refusal comes back to the page, which shows it in place.
+    #[tauri::command]
+    async fn act(app: AppHandle, action: WindowAction) -> Result<(), String> {
+        let request = match action {
+            WindowAction::Connect => Request::Connect { profile_id: None },
+            WindowAction::Rotate => Request::RotateNow,
+            WindowAction::Disconnect => Request::Disconnect,
+            WindowAction::SetAutoRotate { enabled } => Request::SetAutoRotate { enabled },
+            WindowAction::SetInterval { minutes } => Request::SetInterval { minutes },
+            WindowAction::Exit => {
+                exit(app).await;
+                return Ok(());
+            }
+        };
+        send(&app, request).await
+    }
+
+    /// The intervals the tray offers, with their labels, so the window offers the same.
+    #[tauri::command]
+    fn intervals() -> Vec<(u32, String)> {
+        crate::tray::INTERVALS
+            .iter()
+            .map(|&m| (m, crate::tray::interval_label(m)))
+            .collect()
     }
 
     /// Switch autostart on the first time the app runs, and never again.
@@ -196,7 +245,7 @@ mod app {
                 Some(vec![HIDDEN_ARG]),
             ))
             .plugin(tauri_plugin_notification::init())
-            .invoke_handler(tauri::generate_handler![status])
+            .invoke_handler(tauri::generate_handler![status, act, intervals])
             .setup(|app| {
                 let handle = app.handle().clone();
                 let options = Options {
