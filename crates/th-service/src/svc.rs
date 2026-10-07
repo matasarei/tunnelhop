@@ -170,8 +170,13 @@ impl Running {
     /// SPEC §6: bring the tunnel down and lift the block, then stop serving.
     fn stop(self) {
         self.watch.abort();
-        let shutdown = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.orchestrator.shutdown());
-        if self.runtime.block_on(shutdown).is_err() {
+        // The timeout is built inside the runtime: a timer created outside it panics ("no
+        // reactor running"), which aborted every stop before anything was disconnected.
+        let orchestrator = &self.orchestrator;
+        let shutdown = self.runtime.block_on(async {
+            tokio::time::timeout(SHUTDOWN_TIMEOUT, orchestrator.shutdown()).await
+        });
+        if shutdown.is_err() {
             log::error!("disconnecting took too long; stopping anyway");
         }
         let _ = self.stop_pipe.send(());
