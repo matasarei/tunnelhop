@@ -307,8 +307,36 @@ step (or per closely related pair), opened as a PR against `main`.
     - Also: when `Imported.needs_credentials` is non-empty, ask once for a username and
       password for all of them. The profile list marks any profile still waiting, with an
       action to set them.
+    - Also (asked after step 17's first look): Connect / Rotate Now / Disconnect & unblock in the
+      window, and Connect on a profile picked from the list. The service already takes all
+      of them (`Connect { profile_id }`, `RotateNow`, `Disconnect`); this is UI only.
+    - Every error from the service shows in the window (SPEC §5).
     - Create: `app/src/routes/Dashboard.svelte`, `app/src/lib/Import.svelte`, `app/src/lib/ipc.ts`
     - Test: `npm run check`, plus importing good and hostile bundles in the VM.
+27. [ ] Bundle management: list, switch and delete installed bundles (SPEC §3.5).
+    - IPC: `ListBundles` (every bundle, the active one marked) and `DeleteBundle { bundle_id }`.
+      Deleting the active bundle disconnects first. At most 20 installed; a 21st import is
+      refused. Settles `.tasks/feature-orchestrator-followups.md` item 1.
+    - UI: the bundles list with Switch and Delete (with a confirmation).
+    - Modify: `crates/th-core/src/ipc.rs`, `crates/th-service/src/orchestrator.rs`,
+      `crates/th-service/src/credentials.rs` (`remove_bundle`, already there), the dashboard.
+    - Test: orchestrator tests for list, delete (active and not), and the cap; in the VM, switch
+      and delete through the UI.
+28. [ ] Edit a bundle's servers: add `.conf`/`.ovpn` files, remove profiles (SPEC §3.5).
+    - IPC: `AddProfiles { bundle_id, files: [{ name, file_name, content_base64 }] }` and
+      `RemoveProfiles { bundle_id, profile_ids }`, both answered like an import (`Imported` or
+      `ImportFailed` with every error).
+    - Service: rebuild the zip deterministically from the installed manifest and configs plus
+      the change, import it through the normal path, move the credentials to the new id, delete
+      the old bundle. If it was active and connected, rotate into the new one with the
+      kill-switch held (no unblocked window).
+    - th-core: deriving a profile id from a file name (`^[a-z0-9-]{1,40}$`, unique with `-2`,
+      `-3`, …), and the deterministic rebuild, tested on any platform.
+    - UI: Add server (picker or drop, editable names), Remove on each profile (confirmation).
+    - Test: th-core tests for the id derivation and the rebuild (same edit, same id; a hostile
+      added file refused with its line); orchestrator tests for credentials carried over and
+      the active swap; in the VM, add the lab's `ovpn-auth.ovpn` to `bundle-wg.zip` through
+      the UI, connect to it, then remove it, with the leak capture running throughout.
 19. [ ] NSIS installer hooks (service install and uninstall, full cleanup) and
     `docs/TESTING.md` covering every acceptance criterion.
     - Create: `app/src-tauri/windows/hooks.nsh`, `docs/TESTING.md`
@@ -492,6 +520,18 @@ Implementation rulings worth knowing (full text in the commit bodies):
   - `--log <logs>\openvpn-<tunnel>.log` is added to SPEC §4.3's command line, so a failure
     can be read in OpenVPN's own words.
   - Only the `Auth` realm is answered; a private-key passphrase prompt fails the connect.
+
+- **Managing and editing bundles (asked 2026-10-07, after step 17's first look):**
+  - Editing a bundle's servers produces a new bundle through the normal import, rather than
+    a separate editable list. That keeps one validation path and immutable bundle ids, and the
+    UI never reads files holding private keys.
+  - Servers are added from `.conf`/`.ovpn` files (picker or drop), not pasted text.
+  - Ruling: at most 20 bundles are installed at once (SPEC §3.5). Cost if wrong: a user with
+    more deletes one first.
+  - The steps are numbered 27 and 28 because 20–26 are taken; they run before step 19, the
+    installer.
+  - The pop-up seen at sign-in in the VM is OpenVPN GUI, which ships with OpenVPN and finds no
+    configs of its own. It isn't TunnelHop's, and TunnelHop leaves it alone.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
