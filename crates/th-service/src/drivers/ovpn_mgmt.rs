@@ -260,7 +260,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Management<S> {
         }
     }
 
-    /// Send one command and wait for its `SUCCESS:`, keeping notifications for later.
+    /// Send one command and wait for its `SUCCESS:`, keeping notifications for later. Only for
+    /// commands answered that way: a multi-line answer (`status`, `state` without an argument)
+    /// ends in `END` instead, and this would wait for a `SUCCESS:` that never comes.
     pub async fn command(&mut self, command: &str) -> Result<String, ManagementError> {
         let mut line = Zeroizing::new(command.to_string());
         line.push('\n');
