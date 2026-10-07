@@ -263,18 +263,29 @@ mod driver {
             write_atomic(&config_path, config.as_bytes())
                 .map_err(|e| failed(format!("cannot write {}", config_path.display()), e))?;
 
+            // From here on a failure before the session exists removes what was written: the
+            // config copy holds the profile's private key, the other file a live password.
+            let abandon = |error: DriverError| {
+                self.remove_files(tunnel);
+                error
+            };
             let password = Secret::new(management_password());
             let password_path = self.password_path(tunnel);
             write_atomic(
                 &password_path,
                 format!("{}\n", password.expose()).as_bytes(),
             )
-            .map_err(|e| failed(format!("cannot write {}", password_path.display()), e))?;
+            .map_err(|e| {
+                abandon(failed(
+                    format!("cannot write {}", password_path.display()),
+                    e,
+                ))
+            })?;
             // A port the OS just handed out; the ownership check below catches anyone who
             // takes it in between.
             let port = std::net::TcpListener::bind("127.0.0.1:0")
                 .and_then(|l| l.local_addr())
-                .map_err(|e| failed("cannot find a free port".into(), e))?
+                .map_err(|e| abandon(failed("cannot find a free port".into(), e)))?
                 .port();
 
             let log = self.logs.join(format!("openvpn-{tunnel}.log"));
@@ -286,7 +297,7 @@ mod driver {
                 .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
                 .kill_on_drop(true)
                 .spawn()
-                .map_err(|e| failed(format!("cannot start {}", self.exe.display()), e))?;
+                .map_err(|e| abandon(failed(format!("cannot start {}", self.exe.display()), e)))?;
             let pid = child.id().unwrap_or(0);
             // Into the job before it runs a single instruction, then let it go.
             let job = Job::kill_on_close()
@@ -299,7 +310,7 @@ mod driver {
                     win::resume_process(pid)?;
                     Ok(job)
                 })
-                .map_err(|e| failed("cannot start openvpn.exe inside a job".into(), e))?;
+                .map_err(|e| abandon(failed("cannot start openvpn.exe inside a job".into(), e)))?;
 
             let servers: Vec<IpAddr> = profile.endpoints.iter().map(|e| e.addr.ip()).collect();
             let answerer = Answerer {
@@ -732,6 +743,47 @@ mod driver {
             assert!(guard("th-0123456789ab").is_ok());
             for name in ["openvpn", "MyHomeVPN", "th-", "th-../x", "TH-0123"] {
                 assert!(guard(name).is_err(), "{name}");
+            }
+        }
+
+        #[tokio::test]
+        async fn a_failed_start_leaves_no_config_copy_or_password_behind() {
+            // An openvpn.exe that does not exist fails at spawn: nothing runs, so this is safe
+            // anywhere.
+            let root = tempfile::tempdir().unwrap();
+            let layout = Layout::new(root.path());
+            for dir in [layout.tunnels(), layout.secrets(), layout.logs()] {
+                std::fs::create_dir_all(dir).unwrap();
+            }
+            let config = root.path().join("lab.ovpn");
+            std::fs::write(&config, "client\nremote vpn.example.test 1194\n").unwrap();
+            let runtime = Runtime {
+                protocol: Protocol::Openvpn,
+                path: Some(root.path().join("missing").join("openvpn.exe")),
+                availability: Availability::Available {
+                    version: "2.7.7".into(),
+                },
+            };
+            let lookup: CredentialLookup = Arc::new(|_, _| Ok(None));
+            let driver = OpenvpnDriver::new(&runtime, &layout, lookup).unwrap();
+            let bundle = BundleId::parse("0123456789abcdef").unwrap();
+            let profile = ResolvedProfile {
+                bundle,
+                profile_id: "lab".into(),
+                protocol: Protocol::Openvpn,
+                config_path: config,
+                tunnel_name: "th-0123456789ab".into(),
+                endpoints: vec![th_core::driver::ResolvedEndpoint {
+                    addr: "192.0.2.1:1194".parse().unwrap(),
+                    transport: th_core::sanitize::Transport::Udp,
+                }],
+            };
+
+            let error = driver.connect(&profile).await.unwrap_err();
+            assert!(error.to_string().contains("cannot start"), "{error}");
+            for dir in [layout.tunnels(), layout.secrets()] {
+                let left: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+                assert!(left.is_empty(), "{} still holds {left:?}", dir.display());
             }
         }
     }
