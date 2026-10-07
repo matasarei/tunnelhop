@@ -78,13 +78,22 @@ struct Lab {
 }
 
 async fn lab_in(dir: tempfile::TempDir, killswitch_engaged: bool) -> Lab {
+    let log = CallLog::default();
+    let driver = Arc::new(MockDriver::new(log.clone()));
+    lab_with(dir, killswitch_engaged, log, driver).await
+}
+
+async fn lab_with(
+    dir: tempfile::TempDir,
+    killswitch_engaged: bool,
+    log: CallLog,
+    driver: Arc<dyn VpnDriver>,
+) -> Lab {
     let layout = Layout::new(dir.path());
     std::fs::create_dir_all(layout.bundles()).unwrap();
     std::fs::create_dir_all(layout.credentials()).unwrap();
-    let log = CallLog::default();
-    let driver = Arc::new(MockDriver::new(log.clone()));
     let drivers: HashMap<Protocol, Arc<dyn VpnDriver>> =
-        HashMap::from([(Protocol::Wireguard, driver as Arc<dyn VpnDriver>)]);
+        HashMap::from([(Protocol::Wireguard, driver)]);
     let orchestrator = Orchestrator::start(Parts {
         layout: layout.clone(),
         settings: Settings::load(&layout.settings_file()).unwrap(),
@@ -401,4 +410,81 @@ async fn every_change_reaches_the_pipes_clients() {
         }
         other => panic!("expected a status event, got {other:?}"),
     }
+}
+
+/// A driver whose connect waits until the test opens the gate: a rotation held in progress.
+struct GatedDriver {
+    inner: MockDriver,
+    gate: tokio::sync::Semaphore,
+}
+
+#[async_trait::async_trait]
+impl VpnDriver for GatedDriver {
+    async fn connect(
+        &self,
+        profile: &th_core::driver::ResolvedProfile,
+    ) -> Result<th_core::driver::TunnelHandle, th_core::driver::DriverError> {
+        let _pass = self.gate.acquire().await.unwrap();
+        self.inner.connect(profile).await
+    }
+
+    async fn disconnect(
+        &self,
+        handle: &th_core::driver::TunnelHandle,
+    ) -> Result<(), th_core::driver::DriverError> {
+        self.inner.disconnect(handle).await
+    }
+
+    async fn status(
+        &self,
+        handle: &th_core::driver::TunnelHandle,
+    ) -> Result<th_core::driver::TunnelStatus, th_core::driver::DriverError> {
+        self.inner.status(handle).await
+    }
+
+    fn events(&self) -> tokio::sync::broadcast::Receiver<TunnelEvent> {
+        self.inner.events()
+    }
+
+    async fn reconcile(
+        &self,
+    ) -> Result<Vec<th_core::driver::TunnelHandle>, th_core::driver::DriverError> {
+        self.inner.reconcile().await
+    }
+}
+
+#[tokio::test]
+async fn status_answers_while_a_rotation_is_in_progress() {
+    let log = CallLog::default();
+    let driver = Arc::new(GatedDriver {
+        inner: MockDriver::new(log.clone()),
+        gate: tokio::sync::Semaphore::new(0),
+    });
+    let lab = lab_with(tempfile::tempdir().unwrap(), false, log, driver.clone()).await;
+    imported_and_selected(&lab).await;
+
+    let orchestrator = lab.orchestrator.clone();
+    let connecting = tokio::spawn(async move {
+        orchestrator
+            .handle(Request::Connect {
+                profile_id: Some("wg-a".into()),
+            })
+            .await
+    });
+    // Let the connect reach the driver and wait there.
+    while !lab.log.take().iter().any(|e| e.starts_with("engage")) {
+        tokio::task::yield_now().await;
+    }
+
+    let status = tokio::time::timeout(
+        Duration::from_secs(1),
+        lab.orchestrator.handle(Request::GetStatus),
+    )
+    .await
+    .expect("GetStatus answered while the connect was held");
+    assert!(matches!(status, Response::Status { .. }));
+
+    driver.gate.add_permits(1);
+    let connected = report(connecting.await.unwrap());
+    assert_eq!(connected.state, State::Connected);
 }

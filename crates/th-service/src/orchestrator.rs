@@ -223,6 +223,11 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
 
     /// Answer one validated request from the pipe.
     pub async fn handle(&self, request: Request) -> Response {
+        // From the cached report, before the lock: a rotation holds the lock for as long as a
+        // tunnel takes to connect, and the UI must not freeze meanwhile.
+        if request == Request::GetStatus {
+            return self.status();
+        }
         let mut inner = self.inner.lock().await;
         let now = Instant::now();
         match request {
