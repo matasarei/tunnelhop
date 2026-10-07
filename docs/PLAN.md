@@ -199,7 +199,7 @@ step (or per closely related pair), opened as a PR against `main`.
       reaches the internet through the WireGuard tunnels.
 
 ### M3: kill-switch + live rotation (test VM only)
-13. [ ] The WFP kill-switch: engage, allow/revoke interface, disengage and reconcile, all
+13. [x] The WFP kill-switch: engage, allow/revoke interface, disengage and reconcile, all
     persistent. Plus the dev-build safety timer.
     - Create: `crates/th-service/src/killswitch.rs`
     - Modify: `crates/th-service/src/main.rs` (`disengage` calls `KillSwitch::disengage`)
@@ -214,6 +214,15 @@ step (or per closely related pair), opened as a PR against `main`.
       - with `dev-safety`, an unconfirmed engage lifts by itself.
     - Open question to settle here: how our filters arbitrate with WireGuard's own
       kill-switch sublayer when both are active (SPEC assumes a block in any sublayer wins).
+    - **Landed and proven in `th-test` (2026-10-07):** `killswitch.rs` (the rule set as plain
+      data with unit tests, and `WfpKillSwitch`, which implements the engine's `KillSwitch`
+      trait), `tests/killswitch_live.rs`, `th-service disengage`, and the CI marker check. In
+      the VM: while engaged only a permitted endpoint is reachable, and the internet, DNS and
+      the LAN are blocked; engaging again replaces the endpoint set; a WireGuard tunnel carries
+      traffic only while its interface is allowed; a block from a process that aborted
+      survives, and `th-service disengage` lifts it; with `dev-safety`, an unconfirmed engage
+      lifts itself and a confirmed one stays; afterwards `netsh wfp show filters` lists
+      nothing under TunnelHop's provider. Settled: see "Kill-switch and WireGuard's own" below.
 14. [ ] IP probe and orchestrator wiring: the rotation engine with real drivers and kill-switch,
     timers, settings overrides, and pipe events (see "Wiring the engine" above).
     - The probe URLs come from `settings.json` (`probe_urls`), defaulting to ipify then ipinfo.
@@ -402,12 +411,26 @@ Implementation rulings worth knowing (full text in the commit bodies):
 - **Tests that need SYSTEM** run through `scripts\vm.ps1 test <target> -AsSystem`.
 - **The test VM is Windows 11 Home**, which most users run. PowerShell Direct and everything
   the tests need work on it.
+- **Kill-switch filters (step 13):** a fixed provider and sublayer, the sublayer at the
+  highest weight. Permits (weight 15): loopback, DHCPv4 and DHCPv6, ICMPv6 types 133–137, and
+  each endpoint by address, port and protocol. Blocks (weight 0) on all four ALE layers carry
+  `FWPM_FILTER_FLAG_CLEAR_ACTION_RIGHT`, so no other sublayer's permit overrides them.
+  Interface permits are named per LUID and survive a re-engage. Every change is one
+  transaction; `disengage` also removes the sublayer and provider.
+- **Kill-switch and WireGuard's own (step 13, settled):** when a WireGuard config routes
+  everything, WireGuard's own kill-switch is active too, and traffic flows only when both
+  sublayers permit it: ours through the interface permit, WireGuard's through its tunnel. Our
+  block is final and WireGuard's stays in force independently; neither weakens the other.
+- **Dev safety timer (step 13):** the `dev-safety` feature lifts an engage not confirmed within
+  120 s (`TH_DEV_SAFETY_SECONDS` in tests). Allowing a tunnel interface counts as confirmation.
+  A dev build logs the marker on every command, which keeps the marker in the binary; CI fails
+  if a release build contains it, or if a dev-safety build does not.
+- **Live kill-switch tests refuse to run unless `TH_TEST_VM=1`**, which only `scripts\vm.ps1`
+  sets, a second guard beside `#[ignore]` against running one on the PC.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
    Defender). Until there is one, builds are unsigned.
-2. **How the WFP filters arbitrate** with WireGuard's own kill-switch sublayer. To be settled
-   in step 13.
 
 ## Progress
 - **2026-10-06:** steps 1–9 merged (PR #1). The Proton allowlist merged (PR #2). Steps 24–25
@@ -419,5 +442,8 @@ Still open:
 - **2026-10-07:** the lab is up: `th-test` (Windows 11 Home, WireGuard 1.1.1, OpenVPN 2.7.7,
   checkpoint `clean`) and the test servers in Docker Desktop. Step 10's VM check and step 12's
   live test pass on `feature/wireguard-driver`; 163 tests pass on the PC.
-- **Next:** step 13, the WFP kill-switch, in `th-test` only and from a checkpoint. Step 15 (the
-  OpenVPN management client) needs no VM and can go in parallel.
+- **2026-10-07:** step 12 merged (PR #8). Step 13, the kill-switch, landed on
+  `feature/killswitch` and passes in `th-test`, `dev-safety` build included.
+- **Next:** step 14, the IP probe and the orchestrator that drives rotation with the real
+  drivers and kill-switch, ending in the leak test. Step 15 (the OpenVPN management client)
+  needs no VM and can go in parallel.

@@ -222,6 +222,10 @@ scripts\vm.ps1 checkpoint before-wg                 # before every risky run
 scripts\vm.ps1 copy                                 # release th-service.exe to C:\th
 scripts\vm.ps1 configs <path to test-infra\out>     # client configs to C:\th\configs
 scripts\vm.ps1 test wg_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.conf' }
+scripts\vm.ps1 test lib -AsSystem                   # the crate's own VM-only tests, as SYSTEM
+scripts\vm.ps1 checkpoint before-killswitch         # always, before the next one
+scripts\vm.ps1 test killswitch_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.conf' }
+scripts\vm.ps1 test killswitch_live -Features dev-safety -Env @{ TH_DEV_SAFETY_SECONDS = '3' }
 scripts\vm.ps1 run 'C:\th\th-service.exe disengage'
 scripts\vm.ps1 restore before-wg
 ```
