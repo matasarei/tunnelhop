@@ -56,7 +56,7 @@ impl HttpProbe {
             .get(url)
             .send()
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| with_causes(&e))?;
         if !response.status().is_success() {
             return Err(format!("answered {}", response.status()));
         }
@@ -69,6 +69,18 @@ impl HttpProbe {
         }
         parse_ip(&body).ok_or_else(|| "the answer is not an IP address".into())
     }
+}
+
+/// An error with its causes: reqwest's own message ("error sending request") names none of them,
+/// and the cause (refused, timed out, reset) is what tells a dead tunnel from a slow one.
+fn with_causes(error: &dyn std::error::Error) -> String {
+    let mut text = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        text.push_str(&format!(": {cause}"));
+        source = cause.source();
+    }
+    text
 }
 
 #[async_trait]

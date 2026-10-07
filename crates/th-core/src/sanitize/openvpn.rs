@@ -9,6 +9,7 @@ use super::{Credentials, Endpoint, SanitizedConfig, Transport, is_valid_host, pa
 use zeroize::Zeroizing;
 
 use crate::bundle::ImportError;
+use crate::driver::ResolvedEndpoint;
 
 const DEFAULT_PORT: u16 = 1194;
 /// OpenVPN reads a config in chunks of this many bytes, so a longer line would be split into
@@ -225,6 +226,91 @@ pub fn sanitize(
     })
 }
 
+/// Each line of a sanitized config with its tokens, `None` inside inline blocks (whose content
+/// is data, not directives) and on lines that do not tokenize.
+fn directives(text: &str) -> impl Iterator<Item = (&str, Option<Vec<String>>)> {
+    let mut inline_until: Option<String> = None;
+    text.lines().map(move |line| {
+        let line = line.trim_end_matches('\r');
+        if let Some(tag) = &inline_until {
+            if line.trim_start().starts_with(&format!("</{tag}>")) {
+                inline_until = None;
+            }
+            return (line, None);
+        }
+        let tokens = tokenize(line).ok();
+        let opens = tokens
+            .as_ref()
+            .and_then(|t| t.first())
+            .and_then(|first| first.strip_prefix('<')?.strip_suffix('>'))
+            .filter(|tag| INLINE_BLOCKS.contains(tag));
+        if let Some(tag) = opens {
+            inline_until = Some(tag.to_string());
+            return (line, None);
+        }
+        (line, tokens)
+    })
+}
+
+fn is_remote(tokens: &[String]) -> bool {
+    tokens
+        .first()
+        .is_some_and(|first| first.strip_prefix("--").unwrap_or(first) == "remote")
+}
+
+/// Rewrite each `remote` to `resolved[i]`, remotes in file order (the order the sanitizer
+/// extracted them in), so OpenVPN connects to the addresses the kill-switch permits instead of
+/// looking the names up again. Every other line is kept as it was.
+pub fn rewrite_remotes(text: &str, resolved: &[ResolvedEndpoint]) -> Result<String, String> {
+    let mut out = String::with_capacity(text.len());
+    let mut rewritten = 0usize;
+    for (line, tokens) in directives(text) {
+        if tokens.as_deref().is_some_and(is_remote) {
+            let endpoint = resolved.get(rewritten).ok_or_else(|| {
+                format!(
+                    "the config has more remotes than the {} resolved",
+                    resolved.len()
+                )
+            })?;
+            let proto = match endpoint.transport {
+                Transport::Udp => "udp",
+                Transport::Tcp => "tcp-client",
+            };
+            let (ip, port) = (endpoint.addr.ip(), endpoint.addr.port());
+            out.push_str(&format!("remote {ip} {port} {proto}"));
+            rewritten += 1;
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    if rewritten == 0 || rewritten != resolved.len() {
+        return Err(format!(
+            "the config has {rewritten} remotes, but {} were resolved",
+            resolved.len()
+        ));
+    }
+    Ok(out)
+}
+
+/// The remotes written in an installed config: after [`rewrite_remotes`] they are addresses,
+/// which is how a restarted service learns what a leftover tunnel talked to.
+pub fn installed_remotes(text: &str) -> Vec<ResolvedEndpoint> {
+    directives(text)
+        .filter_map(|(_, tokens)| {
+            let tokens = tokens.filter(|t| is_remote(t))?;
+            let [_, ip, port, proto] = tokens.as_slice() else {
+                return None;
+            };
+            let ip: std::net::IpAddr = ip.parse().ok()?;
+            Some(ResolvedEndpoint {
+                addr: std::net::SocketAddr::new(ip, port.parse().ok()?),
+                transport: parse_transport(proto).ok()?,
+            })
+        })
+        .collect()
+}
+
 #[derive(PartialEq)]
 enum State {
     Between,
@@ -375,5 +461,68 @@ fn read_credentials(
         _ => Err(format!(
             "auth-user-pass file \"{full}\" must hold a username and a password on two lines"
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CONFIG: &str = "client\r\n\
+        dev tun\r\n\
+        proto udp\r\n\
+        remote vpn-a.example.test 1194\r\n\
+        --remote \"vpn-b.example.test\" 443 tcp # fallback\r\n\
+        ; remote commented.example.test\r\n\
+        <ca>\r\n\
+        remote not-a-directive.example.test\r\n\
+        </ca>\r\n\
+        remote-random\r\n\
+        verb 3\r\n";
+
+    fn endpoint(addr: &str, transport: Transport) -> ResolvedEndpoint {
+        ResolvedEndpoint {
+            addr: addr.parse().unwrap(),
+            transport,
+        }
+    }
+
+    #[test]
+    fn each_remote_becomes_its_resolved_address_in_order() {
+        let resolved = [
+            endpoint("203.0.113.5:1194", Transport::Udp),
+            endpoint("[2001:db8::7]:443", Transport::Tcp),
+        ];
+        let out = rewrite_remotes(CONFIG, &resolved).unwrap();
+        assert!(out.contains("remote 203.0.113.5 1194 udp\n"), "{out}");
+        assert!(out.contains("remote 2001:db8::7 443 tcp-client\n"), "{out}");
+        assert!(!out.contains("vpn-a.example.test") && !out.contains("vpn-b.example.test"));
+        assert!(!out.contains('\r'));
+        // Comments, inline blocks and every other directive survive untouched.
+        assert!(out.contains("; remote commented.example.test\n"));
+        assert!(out.contains("<ca>\nremote not-a-directive.example.test\n</ca>\n"));
+        assert!(out.contains("remote-random\n"));
+        assert_eq!(installed_remotes(&out), resolved);
+    }
+
+    #[test]
+    fn a_count_mismatch_is_an_error_not_a_guess() {
+        let one = [endpoint("203.0.113.5:1194", Transport::Udp)];
+        assert!(rewrite_remotes(CONFIG, &one).is_err());
+        let three = [
+            endpoint("203.0.113.5:1194", Transport::Udp),
+            endpoint("203.0.113.6:1194", Transport::Udp),
+            endpoint("203.0.113.7:1194", Transport::Udp),
+        ];
+        assert!(rewrite_remotes(CONFIG, &three).is_err());
+        assert!(
+            rewrite_remotes("client\n", &[]).is_err(),
+            "no remote at all"
+        );
+    }
+
+    #[test]
+    fn names_in_a_config_are_not_installed_remotes() {
+        assert_eq!(installed_remotes(CONFIG), []);
     }
 }

@@ -88,6 +88,13 @@ pub fn to_file(dir: &Path) -> io::Result<()> {
         file,
         written,
     });
+    // A service has no console: without this, a panic leaves only the SCM's "terminated
+    // unexpectedly" behind, with nothing to say where.
+    let default = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log::error!("panic: {info}");
+        default(info);
+    }));
     Ok(())
 }
 

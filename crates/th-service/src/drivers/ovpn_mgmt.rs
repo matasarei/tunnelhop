@@ -213,9 +213,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Management<S> {
     }
 
     /// Turn on state notifications, then let OpenVPN start connecting.
+    /// The `>HOLD` OpenVPN announced at startup is the one this releases, so it is consumed
+    /// here: a caller answering it again would send a second `hold release` that can land while
+    /// OpenVPN asks for credentials, and the prompt then never arrives (seen in th-test). A hold
+    /// after this one (a restart) still reaches the caller.
     pub async fn start(&mut self) -> Result<(), ManagementError> {
         self.command("state on").await?;
         self.command("hold release").await?;
+        self.pending.retain(|n| *n != Notification::Hold);
         Ok(())
     }
 

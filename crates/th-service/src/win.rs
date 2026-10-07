@@ -617,6 +617,287 @@ pub fn services_with_prefix(prefix: &str) -> io::Result<Vec<String>> {
     result
 }
 
+/// A Job Object that kills every process in it once its last handle closes — including when the
+/// service itself dies, since the system closes a dead process's handles.
+pub struct Job(std::os::windows::io::OwnedHandle);
+
+impl Job {
+    pub fn kill_on_close() -> io::Result<Job> {
+        use std::os::windows::io::{FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::System::JobObjects::{
+            CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
+        };
+
+        // SAFETY: an unnamed job with default security.
+        let raw = unsafe { CreateJobObjectW(ptr::null(), ptr::null()) };
+        if raw.is_null() {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a fresh handle we own from here on.
+        let job = Job(unsafe { OwnedHandle::from_raw_handle(raw) });
+        let mut limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        // SAFETY: the structure and its size match the information class.
+        let ok = unsafe {
+            SetInformationJobObject(
+                raw,
+                JobObjectExtendedLimitInformation,
+                (&limits as *const JOBOBJECT_EXTENDED_LIMIT_INFORMATION).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(job)
+    }
+
+    pub fn assign(&self, process: std::os::windows::io::BorrowedHandle<'_>) -> io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::AssignProcessToJobObject;
+        // SAFETY: both handles are open for the duration of the call.
+        if unsafe { AssignProcessToJobObject(self.0.as_raw_handle(), process.as_raw_handle()) } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    pub fn terminate(&self) -> io::Result<()> {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::TerminateJobObject;
+        // SAFETY: the job handle is open.
+        if unsafe { TerminateJobObject(self.0.as_raw_handle(), 1) } == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+/// Resume every thread of a process started with `CREATE_SUSPENDED` (one, its main thread).
+pub fn resume_process(pid: u32) -> io::Result<()> {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    use windows_sys::Win32::System::Threading::{OpenThread, ResumeThread, THREAD_SUSPEND_RESUME};
+
+    // SAFETY: a snapshot of every thread in the system; filtered by owner below.
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+    if snapshot == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    let mut entry = THREADENTRY32 {
+        dwSize: size_of::<THREADENTRY32>() as u32,
+        ..Default::default()
+    };
+    let mut resumed = 0;
+    let mut result = Ok(());
+    // SAFETY: the entry's size field is set, as both calls require.
+    let mut more = unsafe { Thread32First(snapshot, &mut entry) } != 0;
+    while more {
+        if entry.th32OwnerProcessID == pid {
+            // SAFETY: a thread id from the snapshot; the handle is closed right after use.
+            let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+            if thread.is_null() {
+                result = Err(io::Error::last_os_error());
+                break;
+            }
+            // SAFETY: an open thread handle with THREAD_SUSPEND_RESUME.
+            let previous = unsafe { ResumeThread(thread) };
+            unsafe { CloseHandle(thread) };
+            if previous == u32::MAX {
+                result = Err(io::Error::last_os_error());
+                break;
+            }
+            resumed += 1;
+        }
+        // SAFETY: as above.
+        more = unsafe { Thread32Next(snapshot, &mut entry) } != 0;
+    }
+    // SAFETY: the snapshot handle came from CreateToolhelp32Snapshot.
+    unsafe { CloseHandle(snapshot) };
+    result?;
+    if resumed == 0 {
+        return Err(io::Error::other(format!("process {pid} has no threads")));
+    }
+    Ok(())
+}
+
+/// The processes listening on `port` over TCP on 127.0.0.1 or every IPv4 address.
+pub fn tcp_listeners(port: u16) -> io::Result<Vec<u32>> {
+    use std::net::Ipv4Addr;
+    use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        GetExtendedTcpTable, MIB_TCPROW_OWNER_PID, TCP_TABLE_OWNER_PID_LISTENER,
+    };
+    use windows_sys::Win32::Networking::WinSock::AF_INET;
+
+    // u32 storage keeps the buffer aligned for the table written into it.
+    let mut buffer = vec![0u32; 1024];
+    loop {
+        let mut size = (buffer.len() * 4) as u32;
+        // SAFETY: the buffer is as large as the size passed.
+        let code = unsafe {
+            GetExtendedTcpTable(
+                buffer.as_mut_ptr().cast(),
+                &mut size,
+                0,
+                u32::from(AF_INET),
+                TCP_TABLE_OWNER_PID_LISTENER,
+                0,
+            )
+        };
+        if code == ERROR_INSUFFICIENT_BUFFER {
+            buffer.resize((size as usize).div_ceil(4).max(buffer.len() * 2), 0);
+            continue;
+        }
+        if code != NO_ERROR {
+            return Err(io::Error::from_raw_os_error(code as i32));
+        }
+        // SAFETY: a MIB_TCPTABLE_OWNER_PID: the row count, then that many rows.
+        let rows = unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr().add(1) as *const MIB_TCPROW_OWNER_PID,
+                buffer[0] as usize,
+            )
+        };
+        return Ok(rows
+            .iter()
+            .filter(|row| u16::from_be(row.dwLocalPort as u16) == port)
+            .filter(|row| {
+                let addr = Ipv4Addr::from(row.dwLocalAddr.to_ne_bytes());
+                addr.is_loopback() || addr.is_unspecified()
+            })
+            .map(|row| row.dwOwningPid)
+            .collect());
+    }
+}
+
+/// An address in the form the IP Helper tables use.
+fn ip_of(
+    addr: &windows_sys::Win32::Networking::WinSock::SOCKADDR_INET,
+) -> Option<std::net::IpAddr> {
+    use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
+    // SAFETY: the family field is shared by every variant and tells which one is set.
+    unsafe {
+        match addr.si_family {
+            AF_INET => {
+                Some(std::net::Ipv4Addr::from(addr.Ipv4.sin_addr.S_un.S_addr.to_ne_bytes()).into())
+            }
+            AF_INET6 => Some(std::net::Ipv6Addr::from(addr.Ipv6.sin6_addr.u.Byte).into()),
+            _ => None,
+        }
+    }
+}
+
+/// The interface that holds `ip` as one of its unicast addresses, and whether the address is
+/// usable yet. A new address is "tentative" while Windows checks it is not a duplicate (about
+/// two seconds on an OpenVPN adapter), and until then nothing can be sent from it.
+pub fn interface_with_address(ip: std::net::IpAddr) -> io::Result<Option<(u64, bool)>> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        FreeMibTable, GetUnicastIpAddressTable, MIB_UNICASTIPADDRESS_ROW,
+        MIB_UNICASTIPADDRESS_TABLE,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_UNSPEC, IpDadStatePreferred};
+
+    let mut table: *mut MIB_UNICASTIPADDRESS_TABLE = ptr::null_mut();
+    // SAFETY: a valid out pointer; the table is freed below.
+    win32_result(unsafe { GetUnicastIpAddressTable(AF_UNSPEC, &mut table) })?;
+    // SAFETY: the call returned a table with NumEntries rows.
+    let rows = unsafe {
+        std::slice::from_raw_parts(
+            (*table).Table.as_ptr() as *const MIB_UNICASTIPADDRESS_ROW,
+            (*table).NumEntries as usize,
+        )
+    };
+    let found = rows
+        .iter()
+        .find(|row| ip_of(&row.Address) == Some(ip))
+        // SAFETY: every bit pattern of the union is a valid u64.
+        .map(|row| {
+            (
+                unsafe { row.InterfaceLuid.Value },
+                row.DadState == IpDadStatePreferred,
+            )
+        });
+    // SAFETY: allocated by GetUnicastIpAddressTable.
+    unsafe { FreeMibTable(table.cast()) };
+    Ok(found)
+}
+
+/// Whether the interface exists and is operationally up (for a tunnel adapter: in use).
+pub fn interface_is_up(luid: u64) -> io::Result<bool> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{GetIfEntry2, MIB_IF_ROW2};
+    use windows_sys::Win32::NetworkManagement::Ndis::IfOperStatusUp;
+
+    if luid == 0 {
+        return Ok(false);
+    }
+    let mut row = MIB_IF_ROW2::default();
+    row.InterfaceLuid.Value = luid;
+    // SAFETY: a row with its LUID set, as the call requires.
+    match win32_result(unsafe { GetIfEntry2(&mut row) }) {
+        Ok(()) => Ok(row.OperStatus == IfOperStatusUp),
+        Err(e)
+            if e.raw_os_error()
+                == Some(windows_sys::Win32::Foundation::ERROR_FILE_NOT_FOUND as i32) =>
+        {
+            Ok(false)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Delete the routes a killed OpenVPN leaves behind: every manually added (`NETMGMT`) route on
+/// the tunnel's interface, and the host routes to its servers. Routes anyone else added on other
+/// interfaces are never touched. Returns how many were deleted.
+pub fn delete_tunnel_routes(interface: u64, servers: &[std::net::IpAddr]) -> io::Result<usize> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::{
+        DeleteIpForwardEntry2, FreeMibTable, GetIpForwardTable2, MIB_IPFORWARD_ROW2,
+        MIB_IPFORWARD_TABLE2,
+    };
+    use windows_sys::Win32::Networking::WinSock::{AF_UNSPEC, MIB_IPPROTO_NETMGMT};
+
+    let mut table: *mut MIB_IPFORWARD_TABLE2 = ptr::null_mut();
+    // SAFETY: a valid out pointer; the table is freed below.
+    win32_result(unsafe { GetIpForwardTable2(AF_UNSPEC, &mut table) })?;
+    // SAFETY: the call returned a table with NumEntries rows.
+    let rows = unsafe {
+        std::slice::from_raw_parts(
+            (*table).Table.as_ptr() as *const MIB_IPFORWARD_ROW2,
+            (*table).NumEntries as usize,
+        )
+    };
+    let mut deleted = 0;
+    let mut result = Ok(());
+    for row in rows {
+        if row.Protocol != MIB_IPPROTO_NETMGMT {
+            continue;
+        }
+        // SAFETY: every bit pattern of the union is a valid u64.
+        let on_tunnel = interface != 0 && unsafe { row.InterfaceLuid.Value } == interface;
+        let prefix = &row.DestinationPrefix;
+        let host = ip_of(&prefix.Prefix).filter(|ip| {
+            let full = if ip.is_ipv4() { 32 } else { 128 };
+            prefix.PrefixLength == full
+        });
+        let to_server = host.is_some_and(|ip| servers.contains(&ip));
+        if on_tunnel || to_server {
+            // SAFETY: a row exactly as the table returned it.
+            match win32_result(unsafe { DeleteIpForwardEntry2(row) }) {
+                Ok(()) => deleted += 1,
+                Err(e) => result = Err(e),
+            }
+        }
+    }
+    // SAFETY: allocated by GetIpForwardTable2.
+    unsafe { FreeMibTable(table.cast()) };
+    result.map(|()| deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -689,5 +970,68 @@ mod tests {
     #[test]
     fn an_unknown_interface_has_no_luid() {
         assert!(interface_luid("th-not-an-interface").is_err());
+    }
+
+    #[test]
+    fn a_listener_is_found_with_its_owning_process() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        assert_eq!(tcp_listeners(port).unwrap(), [std::process::id()]);
+        drop(listener);
+        assert!(tcp_listeners(port).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_address_leads_to_its_interface() {
+        let (loopback, usable) = interface_with_address("127.0.0.1".parse().unwrap())
+            .unwrap()
+            .expect("loopback holds 127.0.0.1");
+        assert_ne!(loopback, 0);
+        assert!(
+            usable,
+            "loopback's address is long past duplicate detection"
+        );
+        assert!(interface_is_up(loopback).unwrap());
+        assert!(!interface_is_up(0).unwrap(), "no interface has LUID 0");
+        // TEST-NET-1: never assigned to a real interface.
+        assert_eq!(
+            interface_with_address("192.0.2.123".parse().unwrap()).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_route_table_is_read_and_nothing_matches_no_tunnel() {
+        // No interface and no servers: nothing qualifies, so nothing on this machine changes.
+        assert_eq!(delete_tunnel_routes(0, &[]).unwrap(), 0);
+    }
+
+    #[test]
+    fn a_suspended_process_runs_once_resumed_and_dies_with_its_job() {
+        use std::os::windows::io::AsHandle;
+        use std::os::windows::process::CommandExt;
+        use std::time::{Duration, Instant};
+        use windows_sys::Win32::System::Threading::{CREATE_NO_WINDOW, CREATE_SUSPENDED};
+
+        let mut child = std::process::Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdout(std::process::Stdio::null())
+            .creation_flags(CREATE_SUSPENDED | CREATE_NO_WINDOW)
+            .spawn()
+            .unwrap();
+        let job = Job::kill_on_close().unwrap();
+        job.assign(child.as_handle()).unwrap();
+        resume_process(child.id()).unwrap();
+        assert!(child.try_wait().unwrap().is_none(), "ping exited early");
+
+        drop(job);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() {
+            assert!(
+                Instant::now() < deadline,
+                "closing the job did not kill ping"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
 }

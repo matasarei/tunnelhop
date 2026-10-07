@@ -20,6 +20,7 @@ use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
 use crate::credentials::{CredentialStore, Dpapi};
+use crate::drivers::openvpn::{CredentialLookup, OpenvpnDriver};
 use crate::drivers::wireguard::WireguardDriver;
 use crate::killswitch::WfpKillSwitch;
 use crate::logging;
@@ -169,8 +170,13 @@ impl Running {
     /// SPEC §6: bring the tunnel down and lift the block, then stop serving.
     fn stop(self) {
         self.watch.abort();
-        let shutdown = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.orchestrator.shutdown());
-        if self.runtime.block_on(shutdown).is_err() {
+        // The timeout is built inside the runtime: a timer created outside it panics ("no
+        // reactor running"), which aborted every stop before anything was disconnected.
+        let orchestrator = &self.orchestrator;
+        let shutdown = self.runtime.block_on(async {
+            tokio::time::timeout(SHUTDOWN_TIMEOUT, orchestrator.shutdown()).await
+        });
+        if shutdown.is_err() {
             log::error!("disconnecting took too long; stopping anyway");
         }
         let _ = self.stop_pipe.send(());
@@ -226,7 +232,15 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
             let driver = WireguardDriver::new(runtime_found, layout.tunnels())?;
             drivers.insert(Protocol::Wireguard, Arc::new(driver));
         }
-        // OpenVPN arrives with its driver (step 16).
+        if runtime_found.protocol == Protocol::Openvpn && runtime_found.is_available() {
+            // The driver answers OpenVPN's credential prompts from the same store.
+            let store = CredentialStore::new(layout.credentials(), Dpapi);
+            let lookup: CredentialLookup = Arc::new(move |bundle, profile| {
+                store.get(bundle, profile).map_err(|e| e.to_string())
+            });
+            let driver = OpenvpnDriver::new(runtime_found, &layout, lookup)?;
+            drivers.insert(Protocol::Openvpn, Arc::new(driver));
+        }
     }
     let killswitch_engaged = WfpKillSwitch::is_engaged().unwrap_or_else(|e| {
         log::error!("cannot tell whether the kill-switch is engaged: {e}");
