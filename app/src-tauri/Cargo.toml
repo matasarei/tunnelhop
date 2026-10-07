@@ -1,0 +1,31 @@
+[package]
+name = "th-app"
+description = "TunnelHop's tray app and dashboard: an unelevated client of th-service."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+# Distinct from the binary's name: on Windows a lib and a bin of the same name collide
+# (rust-lang/cargo#8519).
+name = "th_app_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+log = "0.4.34"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+th-core = { version = "0.1.0", path = "../../crates/th-core" }
+tokio = { version = "1.53.2", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+
+[target."cfg(windows)".dependencies]
+# The pipe client that refuses a pipe not owned by SYSTEM or Administrators.
+th-service = { version = "0.1.0", path = "../../crates/th-service" }
