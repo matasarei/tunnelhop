@@ -136,7 +136,7 @@ fn parse_password(payload: &str) -> Option<Notification> {
 
 /// A command argument in double quotes, with `\` and `"` escaped, so a username or password
 /// containing them stays one argument instead of ending the line's quoting early. Line breaks
-/// never get this far: the IPC layer refuses credentials containing them.
+/// never get this far: the IPC layer and `send_credentials` refuse credentials containing them.
 pub fn quote(value: &str) -> String {
     let mut quoted = String::with_capacity(value.len() + 2);
     quoted.push('"');
@@ -157,6 +157,9 @@ pub enum ManagementError {
     /// Names only the command's first word: the rest may be a credential.
     #[error("OpenVPN refused \"{command}\": {message}")]
     Refused { command: String, message: String },
+    /// A line break would end the command early and start another one.
+    #[error("a username or password contains a line break or NUL")]
+    InvalidCredential,
     #[error("the management connection closed")]
     Closed,
     #[error("a line from OpenVPN is longer than {MAX_LINE} bytes")]
@@ -214,13 +217,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Management<S> {
         Ok(())
     }
 
-    /// Answer a `>PASSWORD:Need '<realm>'` prompt.
+    /// Answer a `>PASSWORD:Need '<realm>'` prompt. The IPC layer already refuses line breaks;
+    /// checking again here keeps a credential from becoming a command whatever the source.
     pub async fn send_credentials(
         &mut self,
         realm: &str,
         username: &str,
         password: &Secret,
     ) -> Result<(), ManagementError> {
+        let breaks_line = |value: &str| value.contains(['\r', '\n', '\0']);
+        if breaks_line(username) || breaks_line(password.expose()) {
+            return Err(ManagementError::InvalidCredential);
+        }
         let realm = quote(realm);
         self.command(&format!("username {realm} {}", quote(username)))
             .await?;

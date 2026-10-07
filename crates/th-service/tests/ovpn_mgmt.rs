@@ -168,6 +168,35 @@ async fn credentials_with_quotes_and_backslashes_stay_one_argument_each() {
 }
 
 #[tokio::test]
+async fn a_credential_with_a_line_break_is_never_sent() {
+    // The server expects nothing after the login: a second command smuggled in on its own line
+    // would fail the transcript.
+    let (addr, server) = openvpn(vec![
+        Send("ENTER PASSWORD:"),
+        Expect("0123456789abcdef"),
+        Send("SUCCESS: password is correct\r\n"),
+    ])
+    .await;
+    let mut management = Management::connect(addr, &password()).await.unwrap();
+    for (username, password) in [
+        ("alice", "x\nsignal SIGTERM"),
+        ("alice", "x\r"),
+        ("al\nice", "x"),
+        ("alice", "x\0"),
+    ] {
+        let result = management
+            .send_credentials("Auth", username, &Secret::new(password))
+            .await;
+        assert!(
+            matches!(result, Err(ManagementError::InvalidCredential)),
+            "{result:?}"
+        );
+    }
+    drop(management);
+    server.await.unwrap();
+}
+
+#[tokio::test]
 async fn a_refused_command_names_only_its_first_word() {
     let (addr, server) = openvpn(vec![
         Send("ENTER PASSWORD:"),
