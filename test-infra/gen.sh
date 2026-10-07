@@ -8,7 +8,7 @@ set -eu
 infra=/infra
 data="$infra/data"
 out="$infra/out"
-server="${SERVER_ADDRESS:-192.168.77.10}"
+server="${SERVER_ADDRESS:-192.168.77.1}"
 
 if [ -e "$data" ] && [ "${FORCE:-0}" != 1 ]; then
     echo "$data exists; run with FORCE=1 to regenerate" >&2

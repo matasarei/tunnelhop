@@ -179,8 +179,9 @@ step (or per closely related pair), opened as a PR against `main`.
       (connect, service RUNNING, disconnect, service gone).
     - **Landed (2026-10-07), live check pending:** `drivers/wireguard.rs`, `tests/wg_live.rs`,
       `test-infra/` (Dockerfile, compose, `gen.sh`, `server.sh`, `whatsmyip.py`) and
-      `scripts/vm.ps1`. The unit tests pass on the PC. Not yet run: the test servers (no
-      `th-servers` VM, and Docker isn't running on the PC) and `wg_live` (no `th-test`).
+      `scripts/vm.ps1`. The unit tests pass on the PC. The test servers run in Docker Desktop
+      on the PC and were checked with clients in containers: all three tunnels connect, and
+      the probe tells them apart. Not yet run: `wg_live`, because there is no `th-test` VM.
 
 ### M3: kill-switch + live rotation (test VM only)
 13. [ ] The WFP kill-switch: engage, allow/revoke interface, disengage and reconcile, all
@@ -340,10 +341,17 @@ Implementation rulings worth knowing (full text in the commit bodies):
   rewritten to the resolved address, peers in file order. A count mismatch is an error.
   `reconcile` reads the endpoints back from that copy and leaves `profile_id` empty; the
   orchestrator maps the tunnel name back to a profile.
+- **Test servers in Docker Desktop, not a VM (step 12):** they run as containers on the PC,
+  published only on the PC's lab addresses: the VPN servers on 192.168.77.1, the probe on .2.
+  That saves a VM's RAM and an OS install; the kill-switch and every live test still run only
+  in `th-test`.
 - **One probe endpoint in the lab (step 12):** instead of one "what's my IP" per tunnel,
-  `http://192.168.77.10:8080/` answers with the caller's address. Each test server NATs out
-  through its own address, so that one URL tells "no tunnel" (`192.168.77.20`) from each
-  tunnel, as a public service would.
+  `http://192.168.77.2:8080/` answers with the caller's address. Each server NATs its tunnel
+  out through its own address and sends probe requests from its tunnel straight to the
+  endpoint, so that one URL tells "no tunnel" (`172.31.77.1`, Docker's proxy) from each tunnel
+  (`.11`, `.12`, `.13`), as a public service would. It has its own address because OpenVPN's
+  `redirect-gateway` routes the server's address around the tunnel.
+- **Leak filter:** allows only the VPN ports on 192.168.77.1, which is also the VM's gateway.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -357,7 +365,7 @@ Still open:
 - **2026-10-07:** the Windows PC is set up (Rust 1.99, Build Tools, Hyper-V access without
   elevation). Step 10's code and step 26 landed on `feature/service-shell`; 130 tests pass
   on Windows. The `th-test` VM doesn't exist yet, so step 10's VM check is pending.
-- **2026-10-07:** step 11 is in PR #7. Step 12's code landed on `feature/wireguard-driver`;
-  its live test waits for both VMs.
-- **Next:** build `th-test` and `th-servers` (DEVELOPMENT.md §2–4). Then run step 10's VM
+- **2026-10-07:** step 11 merged (PR #7). Step 12's code landed on
+  `feature/wireguard-driver`; the test servers run in Docker Desktop instead of a second VM.
+- **Next:** create `th-lab` (DEVELOPMENT.md §2) and build `th-test` (§3). Then run step 10's VM
   check, start the test servers, and run `wg_live`.

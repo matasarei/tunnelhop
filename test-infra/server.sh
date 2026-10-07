@@ -2,9 +2,18 @@
 # Entry point for the test server roles. Configs come from /data, written by gen.sh.
 set -eu
 
+# Add an iptables rule unless it is already there (a restarted container keeps its rules).
+rule() {
+    iptables -t nat -C "$@" 2>/dev/null || iptables -t nat -A "$@"
+}
+
 nat() {
-    iptables -t nat -C POSTROUTING -s "$TUNNEL_SUBNET" -o eth0 -j MASQUERADE 2>/dev/null \
-        || iptables -t nat -A POSTROUTING -s "$TUNNEL_SUBNET" -o eth0 -j MASQUERADE
+    # Tunnel traffic leaves as this container's own address: that is what tells tunnels apart.
+    rule POSTROUTING -s "$TUNNEL_SUBNET" -o eth0 -j MASQUERADE
+    # Probe requests through the tunnel go straight to whatsmyip, so it sees this container's
+    # address rather than whatever Docker's port proxy would show.
+    rule PREROUTING -s "$TUNNEL_SUBNET" -d "$PROBE_ADDRESS" -p tcp --dport 8080 \
+        -j DNAT --to-destination "$WHATSMYIP:8080"
 }
 
 case "${1:-}" in

@@ -9,11 +9,11 @@ development machine offline.
 ```
 Windows 11 Pro PC (x64)                      ← you and Claude Code work here; never firewalled
 ├── repo, Rust, Node, Claude Code
+├── Docker Desktop  test-infra/ containers  ← WireGuard + OpenVPN test servers, "what's my IP" endpoint
 ├── Hyper-V
-│   ├── th-test     Windows 11 x64 VM        ← service, drivers, kill-switch and leak tests run here
-│   │               WireGuard + OpenVPN installed; checkpoint "clean"
-│   └── th-servers  small Linux VM           ← WireGuard + OpenVPN test servers, "what's my IP" endpoint
-└── th-lab          internal switch + NAT, 192.168.77.0/24, so both VMs have fixed addresses
+│   └── th-test     Windows 11 x64 VM        ← service, drivers, kill-switch and leak tests run here
+│                   WireGuard + OpenVPN installed; checkpoint "clean"
+└── th-lab          internal switch + NAT, 192.168.77.0/24; the PC is .1 (servers) and .2 (probe)
 ```
 
 **Why a VM, when the PC is already Windows?** The kill-switch blocks all traffic with WFP
@@ -31,13 +31,13 @@ restore a checkpoint while the VM's network is fully blocked.
 | Installing the service, the pipe, WireGuard connect/disconnect (steps 10–12) | `th-test`; the PC is tolerable but avoid it |
 | Kill-switch, leak tests, OpenVPN live tests (steps 13–16) | **`th-test` only** |
 | UI and installer (steps 17–19) | `th-test` from the clean checkpoint, then one final pass on the PC |
-| VPN test servers | `th-servers` |
+| VPN test servers | Docker Desktop on the PC, reachable from `th-test` only (§4) |
 
 ## Requirements
 
 - **Windows 11 Pro, Enterprise or Education.** Hyper-V isn't available on Home. If the PC is
   Home, see [If the PC is Windows Home](#if-the-pc-is-windows-home) before starting.
-- **RAM:** 16 GB or more (6 GB for `th-test`, 1–2 GB for `th-servers`).
+- **RAM:** 16 GB or more (6 GB for `th-test`, about 1 GB for the test server containers).
 - **Disk:** about 100 GB free.
 - **CPU virtualization** enabled in the firmware (VT-x/AMD-V). It usually is already.
 
@@ -51,6 +51,7 @@ winget install --id Rustlang.Rustup -e
 winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 winget install --id OpenJS.NodeJS.LTS -e          # needed from step 17
 winget install --id WiresharkFoundation.Wireshark -e   # reads leak-test captures
+winget install --id Docker.DockerDesktop -e       # runs the test servers (WSL2 backend)
 Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All   # then reboot
 ```
 
@@ -75,22 +76,28 @@ Add-LocalGroupMember -SID S-1-5-32-578 -Member "$env:USERDOMAIN\$env:USERNAME"  
 
 ## 2. The lab network
 
-A private switch with NAT, so both VMs keep the same addresses across reboots (Hyper-V's
+A private switch with NAT, so the VM keeps the same address across reboots (Hyper-V's
 "Default Switch" changes its subnet). Administrator PowerShell:
 
 ```powershell
 New-VMSwitch -Name th-lab -SwitchType Internal
 New-NetIPAddress -IPAddress 192.168.77.1 -PrefixLength 24 -InterfaceAlias "vEthernet (th-lab)"
+New-NetIPAddress -IPAddress 192.168.77.2 -PrefixLength 24 -InterfaceAlias "vEthernet (th-lab)"
 New-NetNat -Name th-lab -InternalIPInterfaceAddressPrefix 192.168.77.0/24
+# Let th-test, and only the lab subnet, reach the test servers and the probe.
+New-NetFirewallRule -DisplayName "TunnelHop test servers (lab only)" -Direction Inbound `
+    -Action Allow -Protocol UDP -LocalPort 51820,51821,1194 -RemoteAddress 192.168.77.0/24
+New-NetFirewallRule -DisplayName "TunnelHop probe (lab only)" -Direction Inbound `
+    -Action Allow -Protocol TCP -LocalPort 8080 -RemoteAddress 192.168.77.0/24
 ```
 
 | Address | Host |
 |---|---|
-| 192.168.77.1 | the PC (gateway and NAT to the internet) |
-| 192.168.77.10 | `th-servers` |
+| 192.168.77.1 | the PC: gateway, NAT to the internet, and the VPN test servers |
+| 192.168.77.2 | the PC: the "what's my IP" probe |
 | 192.168.77.20 | `th-test` |
 
-The switch has no DHCP, so each VM gets a static address, gateway 192.168.77.1, and DNS
+The switch has no DHCP, so the VM gets a static address, gateway 192.168.77.1, and DNS
 1.1.1.1.
 
 ## 3. The test VM (`th-test`)
@@ -136,28 +143,42 @@ The switch has no DHCP, so each VM gets a static address, gateway 192.168.77.1, 
    Checkpoint-VM -Name th-test -SnapshotName clean
    ```
 
-## 4. The test servers (`th-servers`)
+## 4. The test servers (Docker Desktop on the PC)
 
-A small Debian or Ubuntu Server VM: Generation 2, 2 GB RAM, 16 GB disk, switch `th-lab`,
-address 192.168.77.10. Turn off Secure Boot for Linux (`Set-VMFirmware -VMName th-servers
--EnableSecureBoot Off`) and install Docker and SSH in it. Copy `test-infra/` in and follow its
-[README](../test-infra/README.md): `docker compose run --rm gen`, then `docker compose up -d`.
-It provides:
+The servers are containers, not another VM: Docker Desktop's WSL2 kernel has WireGuard and TUN,
+and running them on the PC saves a VM's RAM and an OS install. They publish their ports on the
+PC's lab addresses only (192.168.77.1 and .2), so they are reachable from `th-test` and from
+nothing else. They hold no kill-switch and touch none of the PC's own networking. In
+`test-infra/` (see its [README](../test-infra/README.md)):
+
+```sh
+docker compose run --rm gen     # keys, server configs (data/), client configs (out/)
+docker compose up -d --build    # needs th-lab (§2)
+```
+
+They provide:
 
 - **two WireGuard servers and one OpenVPN server**, each with its own tunnel subnet and each
   NATing out through its own address, so a rotation between them really changes the address
   the outside sees;
-- **one "what's my IP" endpoint, `http://192.168.77.10:8080/`**, answering with the caller's
+- **one "what's my IP" endpoint, `http://192.168.77.2:8080/`**, answering with the caller's
   source address;
 - **a generator** that writes fresh keys and matching client configs into `test-infra/out/`
   (gitignored), to be copied into `th-test` and zipped into test bundles.
 
-**Why the endpoint matters.** Both VMs reach the internet through the PC's NAT, so any public
+**Why the endpoint matters.** The VM reaches the internet through the PC's NAT, so any public
 "what's my IP" service would see the same address with or without the tunnel. The engine's
 check that the IP changed (and differs from the ISP address) would then always fail. In
-tests the service's probe URLs point at this endpoint instead: with no tunnel it sees
-`192.168.77.20`, and through each tunnel it sees that server's own NAT address (`172.31.77.11`,
-`.12`, `.13`). Step 14 makes the probe URLs configurable for exactly this.
+tests the service's probe URLs point at this endpoint instead. With no tunnel it sees Docker's
+port proxy (`172.31.77.1`), and through each tunnel it sees that server's own address
+(`172.31.77.11`, `.12`, `.13`). Step 14 makes the probe URLs configurable for exactly this.
+
+**Why a second address.** OpenVPN's `redirect-gateway` routes the server's own address around
+the tunnel, so a probe on 192.168.77.1 would never see the OpenVPN exit.
+
+If Docker Desktop is not an option, a small Linux VM on `th-lab` running the same compose file
+works too: give it an address, then set `SERVER_ADDRESS` and `PROBE_ADDRESS` to it (the probe
+then needs a second address on that VM for the same reason).
 
 ## 5. Day-to-day workflow
 
@@ -196,8 +217,8 @@ Restore-VMCheckpoint -VMName th-test -Name before-killswitch -Confirm:$false
 Restore-VMCheckpoint -VMName th-test -Name clean -Confirm:$false  # back to a fresh Windows
 ```
 
-**Shutting down when you're done:** `Stop-VM th-test; Stop-VM th-servers`. When the VMs are
-off, Hyper-V uses no CPU or memory for them.
+**Shutting down when you're done:** `Stop-VM th-test`, and `docker compose stop` in
+`test-infra/`. When the VM is off, Hyper-V uses no CPU or memory for it.
 
 ## 6. The leak test (steps 14 and 16)
 
@@ -215,10 +236,12 @@ traffic:
 
 ```powershell
 & "C:\Program Files\Wireshark\tshark.exe" -r leak.pcapng `
-  -Y "not (ip.addr==192.168.77.10) and not dhcp and not dhcpv6 and not (icmpv6.type >= 133 and icmpv6.type <= 137)"
+  -Y "not (ip.addr==192.168.77.1 and udp.port in {51820 51821 1194}) and not dhcp and not dhcpv6 and not (icmpv6.type >= 133 and icmpv6.type <= 137)"
 ```
 
-The expected output is **empty**. Anything listed is a leak.
+The expected output is **empty**. Anything listed is a leak. The filter allows only the VPN
+ports on 192.168.77.1, not the whole address: that address is also the VM's gateway, so
+anything else sent to it is a leak too.
 
 ## Safety rules
 
