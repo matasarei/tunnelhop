@@ -3,9 +3,12 @@
 
 use std::error::Error;
 use std::ffi::OsString;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
+use th_core::ipc::{Request, Response, RuntimeInfo, StatusReport};
+use th_core::rotation::State;
+use tokio::sync::{broadcast, oneshot};
 use windows_service::service::{
     ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
     ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod,
@@ -15,9 +18,10 @@ use windows_service::service_control_handler::{self, ServiceControlHandlerResult
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
-use crate::credentials::{CredentialStore, Dpapi};
+use crate::logging;
+use crate::pipe::{Handler, Listener, PIPE_NAME};
+use crate::runtimes::{self, Runtime};
 use crate::store::{self, Layout, Settings};
-use crate::{logging, runtimes};
 
 pub const SERVICE_NAME: &str = "TunnelHop";
 const DISPLAY_NAME: &str = "TunnelHop";
@@ -80,17 +84,20 @@ fn run_service() -> Result<(), Box<dyn Error>> {
         Duration::from_secs(10),
     )?;
 
-    if let Err(e) = start() {
-        // The SCM records the code; the log, if it could be opened, has the reason.
-        log::error!("could not start: {}", describe(e.as_ref()));
-        report(
-            ServiceState::Stopped,
-            ServiceControlAccept::empty(),
-            ServiceExitCode::ServiceSpecific(1),
-            Duration::ZERO,
-        )?;
-        return Err(e);
-    }
+    let running = match start() {
+        Ok(running) => running,
+        Err(e) => {
+            // The SCM records the code; the log, if it could be opened, has the reason.
+            log::error!("could not start: {}", describe(e.as_ref()));
+            report(
+                ServiceState::Stopped,
+                ServiceControlAccept::empty(),
+                ServiceExitCode::ServiceSpecific(1),
+                Duration::ZERO,
+            )?;
+            return Err(e);
+        }
+    };
 
     report(
         ServiceState::Running,
@@ -109,6 +116,7 @@ fn run_service() -> Result<(), Box<dyn Error>> {
     )?;
     // From step 13 on: disconnect the tunnel and disengage the kill-switch here.
     log::info!("stopping ({control:?})");
+    running.stop();
     report(
         ServiceState::Stopped,
         ServiceControlAccept::empty(),
@@ -118,8 +126,55 @@ fn run_service() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Prepare the store, open the log, and look at what is installed.
-fn start() -> Result<(), Box<dyn Error>> {
+/// What runs while the service is up.
+struct Running {
+    runtime: tokio::runtime::Runtime,
+    stop_pipe: oneshot::Sender<()>,
+    pipe: tokio::task::JoinHandle<std::io::Result<()>>,
+}
+
+impl Running {
+    fn stop(self) {
+        let _ = self.stop_pipe.send(());
+        match self.runtime.block_on(self.pipe) {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => log::error!("the pipe server had failed: {e}"),
+            Err(e) => log::error!("the pipe server panicked: {e}"),
+        }
+        self.runtime.shutdown_timeout(Duration::from_secs(5));
+    }
+}
+
+/// Answers what the service can answer before the orchestrator exists (step 14).
+struct ShellHandler {
+    settings: Settings,
+    runtimes: Vec<RuntimeInfo>,
+}
+
+impl Handler for ShellHandler {
+    async fn handle(&self, request: Request) -> Response {
+        match request {
+            Request::GetStatus => Response::Status {
+                report: StatusReport {
+                    state: State::Disconnected,
+                    profile_id: None,
+                    public_ip: None,
+                    killswitch_engaged: false,
+                    bundle: None,
+                    auto_rotate: self.settings.auto_rotate.unwrap_or(true),
+                    interval_minutes: self.settings.interval_minutes.unwrap_or(15),
+                    runtimes: self.runtimes.clone(),
+                },
+            },
+            _ => Response::Error {
+                message: "this version of the service cannot do that yet".into(),
+            },
+        }
+    }
+}
+
+/// Prepare the store, open the log, look at what is installed, and open the pipe.
+fn start() -> Result<Running, Box<dyn Error>> {
     let layout = Layout::system()?;
     store::prepare(&layout)?;
     logging::to_file(&layout.logs())?;
@@ -129,12 +184,13 @@ fn start() -> Result<(), Box<dyn Error>> {
         layout.root().display()
     );
 
-    match Settings::load(&layout.settings_file()) {
-        Ok(settings) => log::info!("settings: {settings:?}"),
-        Err(e) => log::warn!("settings.json is unreadable, using defaults: {e}"),
-    }
-    let _credentials = CredentialStore::new(layout.credentials(), Dpapi);
-    for runtime in runtimes::discover() {
+    let settings = Settings::load(&layout.settings_file()).unwrap_or_else(|e| {
+        log::warn!("settings.json is unreadable, using defaults: {e}");
+        Settings::default()
+    });
+    log::info!("settings: {settings:?}");
+    let runtimes = runtimes::discover();
+    for runtime in &runtimes {
         log::info!(
             "{:?} runtime: {:?} at {}",
             runtime.protocol,
@@ -145,7 +201,28 @@ fn start() -> Result<(), Box<dyn Error>> {
                 .map_or_else(|| "-".into(), |p| p.display().to_string())
         );
     }
-    Ok(())
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    // Binding fails if something already holds the pipe name; the service must not start then.
+    let listener = runtime.block_on(async { Listener::bind(PIPE_NAME) })?;
+    let handler = Arc::new(ShellHandler {
+        settings,
+        runtimes: runtimes.iter().map(Runtime::info).collect(),
+    });
+    let (events, _) = broadcast::channel(64);
+    let (stop_pipe, stopped) = oneshot::channel();
+    let pipe = runtime.spawn(listener.serve(handler, events, async {
+        let _ = stopped.await;
+    }));
+    log::info!("listening on {PIPE_NAME}");
+    Ok(Running {
+        runtime,
+        stop_pipe,
+        pipe,
+    })
 }
 
 /// Register the service to start automatically as LocalSystem, restart it if it crashes, and

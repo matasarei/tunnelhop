@@ -12,8 +12,8 @@ use windows_sys::Win32::Foundation::{
 };
 use windows_sys::Win32::Security::Authorization::{
     ConvertSecurityDescriptorToStringSecurityDescriptorW,
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, SDDL_REVISION_1,
-    SE_FILE_OBJECT, SetNamedSecurityInfoW,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetNamedSecurityInfoW, GetSecurityInfo,
+    SDDL_REVISION_1, SE_FILE_OBJECT, SE_KERNEL_OBJECT, SetNamedSecurityInfoW,
 };
 use windows_sys::Win32::Security::Cryptography::{
     CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN, CryptProtectData, CryptUnprotectData,
@@ -25,7 +25,9 @@ use windows_sys::Win32::Security::{
     WinBuiltinAdministratorsSid, WinLocalSystemSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
-    CreateDirectoryW, FILE_ATTRIBUTE_REPARSE_POINT, GetFileVersionInfoSizeW, GetFileVersionInfoW,
+    CreateDirectoryW, CreateFileW, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_OVERLAPPED,
+    FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES, FILE_WRITE_DATA, GetFileVersionInfoSizeW,
+    GetFileVersionInfoW, OPEN_EXISTING, SECURITY_IDENTIFICATION, SECURITY_SQOS_PRESENT,
     VS_FIXEDFILEINFO, VerQueryValueW,
 };
 use windows_sys::Win32::System::Com::CoTaskMemFree;
@@ -102,7 +104,21 @@ pub fn program_files() -> io::Result<PathBuf> {
 /// A security descriptor parsed from SDDL.
 pub struct SecurityDescriptor(LocalBox);
 
+// SAFETY: the descriptor is never modified after parsing, and only read by the system calls
+// it is passed to, so sharing it between threads is sound.
+unsafe impl Send for SecurityDescriptor {}
+unsafe impl Sync for SecurityDescriptor {}
+
 impl SecurityDescriptor {
+    /// Attributes carrying this descriptor, for creating an object. They borrow `self`.
+    pub fn attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.0.0,
+            bInheritHandle: 0,
+        }
+    }
+
     pub fn from_sddl(sddl: &str) -> io::Result<Self> {
         let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
         // SAFETY: NUL-terminated input and a valid out pointer.
@@ -143,11 +159,7 @@ impl SecurityDescriptor {
 /// open to whatever the parent grants. `Ok(false)` when it already exists.
 pub fn create_dir_with_sddl(path: &Path, sddl: &str) -> io::Result<bool> {
     let sd = SecurityDescriptor::from_sddl(sddl)?;
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
-        lpSecurityDescriptor: sd.0.0,
-        bInheritHandle: 0,
-    };
+    let attributes = sd.attributes();
     // SAFETY: NUL-terminated path; the descriptor outlives the call.
     if unsafe { CreateDirectoryW(wide(path).as_ptr(), &attributes) } != 0 {
         return Ok(true);
@@ -194,7 +206,57 @@ pub fn dacl_sddl(path: &Path) -> io::Result<String> {
             &mut sd,
         )
     })?;
-    let sd = LocalBox(sd);
+    dacl_to_sddl(LocalBox(sd))
+}
+
+/// Open the client end of a named pipe for overlapped I/O, asking for read, write-data and
+/// write-attributes only: the pipe grants users no more (see `pipe::PIPE_SDDL`), so asking for
+/// `GENERIC_WRITE` would be refused. The server may only identify the client, never act as it.
+pub fn open_pipe_client(name: &str) -> io::Result<std::os::windows::io::OwnedHandle> {
+    use std::os::windows::io::{FromRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+
+    // SAFETY: NUL-terminated name; the returned handle is checked and then owned.
+    let handle = unsafe {
+        CreateFileW(
+            wide(name).as_ptr(),
+            FILE_GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES,
+            0,
+            ptr::null(),
+            OPEN_EXISTING,
+            FILE_FLAG_OVERLAPPED | SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION,
+            ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: a valid handle that nothing else owns.
+    Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
+}
+
+/// The DACL of a kernel object (a pipe, say) by its handle, in SDDL.
+pub fn handle_dacl_sddl(object: &impl std::os::windows::io::AsHandle) -> io::Result<String> {
+    use std::os::windows::io::AsRawHandle;
+
+    let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: the borrow keeps the handle open for the call; `sd` is freed by LocalBox.
+    win32_result(unsafe {
+        GetSecurityInfo(
+            object.as_handle().as_raw_handle(),
+            SE_KERNEL_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut sd,
+        )
+    })?;
+    dacl_to_sddl(LocalBox(sd))
+}
+
+fn dacl_to_sddl(sd: LocalBox) -> io::Result<String> {
     let mut text: *mut u16 = ptr::null_mut();
     // SAFETY: `sd` is a valid descriptor; `text` is freed by LocalBox.
     let ok = unsafe {
