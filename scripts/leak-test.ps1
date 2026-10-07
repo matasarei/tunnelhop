@@ -50,7 +50,14 @@ try {
         pktmon stop | Out-Null
         pktmon etl2pcap C:\th\leak.etl --out C:\th\leak.pcapng | Out-Null
         $null = Ctl disconnect
-        $ips
+        # Who "the VM" is on the wire, read here rather than assumed: a rebuilt VM has a new MAC.
+        $adapter = Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Select-Object -First 1
+        $address = (Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4).IPAddress
+        [pscustomobject]@{
+            Ips = $ips
+            Mac = $adapter.MacAddress.Replace('-', ':').ToLower()
+            Address = $address
+        }
     }
     $folder = Join-Path $env:TEMP 'th-leak'
     New-Item -ItemType Directory -Force $folder | Out-Null
@@ -59,12 +66,14 @@ try {
     Remove-PSSession $session
 }
 
-"$Rotations rotations; public IPs: " + (($result | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+"$Rotations rotations; public IPs: " + (($result.Ips | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+if ($result.Mac -notmatch '^([0-9a-f]{2}:){5}[0-9a-f]{2}$') { throw "unexpected MAC from the VM: $($result.Mac)" }
+"the VM on the wire: $($result.Mac), $($result.Address)"
 
 $ports = ($VpnPorts | ForEach-Object { "udp.port==$_" }) -join ' || '
 $vpn = "ip.addr==192.168.77.1 && ($ports)"
 $allowed = "($vpn) || dhcp || dhcpv6 || (icmpv6.type>=133 && icmpv6.type<=137) || arp"
-$fromVm = 'eth.src==00:15:5d:05:1a:01 || ip.src==192.168.77.20'
+$fromVm = "eth.src==$($result.Mac) || ip.src==$($result.Address)"
 $analysis = @"
 f=/c/leak.pcapng
 echo "frames captured:              `$(tshark -r `$f 2>&1 | wc -l)"
