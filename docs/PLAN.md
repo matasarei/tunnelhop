@@ -246,7 +246,7 @@ step (or per closely related pair), opened as a PR against `main`.
       WireGuard; the rest ARP and one inbound TCP reset from outside).
 
 ### M4: OpenVPN
-15. [ ] The management protocol client: auth, `state on`, `hold release`, `>STATE`/`>PASSWORD`
+15. [x] The management protocol client: auth, `state on`, `hold release`, `>STATE`/`>PASSWORD`
     parsing, and `signal SIGTERM`.
     - Also: escape username and password for the `username`/`password` commands, so quotes
       and backslashes can't break the line.
@@ -254,6 +254,13 @@ step (or per closely related pair), opened as a PR against `main`.
     - Test: cross-platform, against a fake TCP server replaying transcripts: wrong password,
       a state sequence, a password prompt (with quotes and backslashes in the credentials),
       and a server-side close.
+    - **Landed (2026-10-07):** `drivers/ovpn_mgmt.rs` (a line parser plus the session) and
+      `tests/ovpn_mgmt.rs`: 8 transcript tests, the four the plan names plus a port that never
+      asks for a password (not ours), a notification arriving between a command and its answer,
+      a refused command whose error carries no credential, and an endless line. Also
+      `tests/ovpn_mgmt_live.rs`, run in `th-test` against the real OpenVPN 2.7.7 and the lab
+      server: login, hold release, CONNECTED with a `10.77.3.x` address in about a second,
+      then SIGTERM, a clean exit within 15 s, and no route left behind.
 16. [ ] OpenvpnDriver: random port and password file, Job Object spawn, credentials from
     DPAPI, the teardown timeout, and reconnect grace.
     - Create: `crates/th-service/src/drivers/openvpn.rs`
@@ -264,6 +271,10 @@ step (or per closely related pair), opened as a PR against `main`.
       `128.0.0.0/1` through the dead tunnel, and a host route to the server). Stop it through
       the management interface; on reconcile after a crash, remove routes whose next hop is a
       tunnel that no longer exists.
+    - Note from step 15: the management port is a local TCP port, so another local process could
+      bind it first and pose as OpenVPN, and the client would then hand it the VPN credentials
+      when it asks. Before connecting, check that the listening socket on that port belongs to
+      the `openvpn.exe` the driver started (`GetExtendedTcpTable` gives the owning process).
 
 ### M5: UI + installer
 17. [ ] The Tauri app shell: pipe client, tray menu, close-to-tray, and autostart.
@@ -446,6 +457,11 @@ Implementation rulings worth knowing (full text in the commit bodies):
 - **What the leak test counts:** frames the VM *sends* on its physical adapter. pktmon captures
   before the firewall, so inbound packets appear whether or not they are let in; they are listed
   for information only.
+- **Management client (step 15):** notifications that arrive while a command waits for its
+  answer are queued, never dropped or mistaken for the answer. A port that does not ask for the
+  management password is refused as not ours. An error from a command names only the command's
+  first word, since the rest can be a credential. Credentials are double-quoted with `\` and `"`
+  escaped; line breaks are already refused at the IPC layer.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -465,5 +481,7 @@ Still open:
   `feature/killswitch` and passes in `th-test`, `dev-safety` build included.
 - **2026-10-07:** step 13 merged (PR #9). Step 14 landed on `feature/orchestrator`: TunnelHop
   rotates end to end in `th-test`, and the WireGuard leak test passes.
-- **Next:** step 15, the OpenVPN management client (no VM needed), then step 16, the OpenVPN
-  driver and the mixed-protocol leak test.
+- **2026-10-07:** step 14 merged (PR #10). Step 15, the OpenVPN management client, landed on
+  `feature/ovpn-management`, checked against transcripts and against the real OpenVPN in
+  `th-test`.
+- **Next:** step 16, the OpenVPN driver and the mixed-protocol leak test.
