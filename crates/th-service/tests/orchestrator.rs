@@ -488,3 +488,50 @@ async fn status_answers_while_a_rotation_is_in_progress() {
     let connected = report(connecting.await.unwrap());
     assert_eq!(connected.state, State::Connected);
 }
+
+#[tokio::test]
+async fn selecting_another_bundle_first_leaves_the_current_one() {
+    let lab = lab().await;
+    imported_and_selected(&lab).await;
+    report(
+        lab.orchestrator
+            .handle(Request::Connect {
+                profile_id: Some("wg-a".into()),
+            })
+            .await,
+    );
+    let other = MANIFEST.replace(r#""bundle_name": "Lab""#, r#""bundle_name": "Other lab""#);
+    let Response::Imported { bundle: second, .. } = lab
+        .orchestrator
+        .handle(Request::ImportBundle {
+            zip_base64: ipc::encode_zip(&bundle_zip(&other)),
+        })
+        .await
+    else {
+        panic!("the second import failed");
+    };
+    lab.log.take();
+
+    let status = report(
+        lab.orchestrator
+            .handle(Request::SelectBundle {
+                bundle_id: second.bundle_id.clone(),
+            })
+            .await,
+    );
+    let log = lab.log.take();
+    assert!(log.contains(&"disconnect:wg-a".to_string()), "{log:?}");
+    assert!(log.contains(&"disengage".to_string()), "{log:?}");
+    assert_eq!(status.state, State::Disconnected);
+    assert!(!status.killswitch_engaged);
+    assert_eq!(status.bundle.unwrap().bundle_name, "Other lab");
+    let saved = Settings::load(&lab.layout.settings_file()).unwrap();
+    assert_eq!(
+        saved.active_bundle.as_deref(),
+        Some(second.bundle_id.as_str())
+    );
+    assert_eq!(
+        saved.selected_profile, None,
+        "a profile of the old bundle is forgotten"
+    );
+}
