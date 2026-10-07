@@ -11,6 +11,7 @@ throwaway test material: the keys are generated on the spot and never committed.
 | `wg-b` | 192.168.77.1:41821/udp | 10.77.2.0/24 | 172.31.77.12 |
 | `ovpn` | 192.168.77.1:1194/udp | 10.77.3.0/24 | 172.31.77.13 |
 | `whatsmyip` | 198.18.77.2:8080/tcp | n/a | n/a (172.31.77.10) |
+| `lan-target` | 192.168.77.1:8081/tcp | n/a | n/a (172.31.77.9); a LAN host the kill-switch test must block |
 
 Ports are published on those two lab addresses only, so nothing here is reachable from the PC's
 other networks, and `up` fails until the `th-lab` switch gives the PC those addresses.
