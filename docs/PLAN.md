@@ -46,7 +46,8 @@ docs/TESTING.md               # the full manual acceptance procedure (step 19)
 ### Service
 - `th-service.exe` runs as LocalSystem, start type automatic. It owns tunnels, the kill-switch,
   timers, bundles and secrets.
-- Pipe SDDL `D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)`. Requests are validated with
+- Pipe SDDL `D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;OW)(A;;0x12019b;;;IU)`: interactive users get
+  read and write without `FILE_CREATE_PIPE_INSTANCE` (step 11 ruling). Requests are validated with
   `th_core::ipc::Request::validate` before anything else.
 - Storage under `%ProgramData%\TunnelHop\` with an ACL granting only SYSTEM and Administrators
   full control (SPEC §2.3). Secrets are DPAPI blobs from `CryptProtectData`, LocalSystem scope.
@@ -158,11 +159,16 @@ step (or per closely related pair), opened as a PR against `main`.
       Still to do in `th-test`: `install`, `sc query TunnelHop` RUNNING, `icacls` on the store
       and on `secrets\`, `uninstall`, and the elevated
       `cargo test -p th-service --lib -- --ignored` (`prepare` replacing a planted junction).
-11. [ ] The named pipe server with SDDL, dispatching `th_core::ipc` requests.
+11. [x] The named pipe server with SDDL, dispatching `th_core::ipc` requests.
     - Create: `crates/th-service/src/pipe.rs`, `crates/th-service/tests/pipe.rs`
       (`#[cfg(windows)]`)
     - Test: on Windows CI, connect as the runner user and do a `Ping` round-trip; a request
       that fails `validate` gets `Response::Error`.
+    - **Landed (2026-10-07):** `pipe.rs` (`Listener`, the `Handler` trait, `pipe::connect` for
+      clients) and `tests/pipe.rs` (10 tests: ping, validation before the handler, wrong
+      version, request before hello, second hello, malformed line, events to every client,
+      name squatting, shutdown), plus a unit test that pins the pipe's DACL. The service opens
+      the pipe at start; until step 14 its handler answers `GetStatus` and refuses the rest.
 12. [ ] WireguardDriver: connect, disconnect, status and reconcile. Also the test servers and
     the VM helper.
     - Create: `crates/th-service/src/drivers/{mod.rs,wireguard.rs}`,
@@ -330,6 +336,27 @@ Implementation rulings worth knowing (full text in the commit bodies):
 - **`disengage`** is a no-op until step 13 gives it a kill-switch to remove.
 - **`install` registers the executable where it is.** It must sit in a directory only
   administrators can write (Program Files; `C:\th` in the VM is locked down for this).
+- **Pipe rights (step 11):** for a pipe, `GW` includes `FILE_CREATE_PIPE_INSTANCE` (the
+  `FILE_APPEND_DATA` bit), so the plan's `GRGW` would let any logged-in user add an instance
+  of `\\.\pipe\tunnelhop` and impersonate the service to the UI. Interactive users get
+  `0x12019b` instead. Clients must therefore open the pipe with an explicit mask (read,
+  write-data, write-attributes) rather than `GENERIC_WRITE`: `pipe::connect` does that, with
+  `SECURITY_IDENTIFICATION` so a server can never act as its client. The owner (`OW`, the
+  creating process) keeps full control so the service can add instances.
+- **Pipe protocol (step 11):** `Hello` within 10 s or the connection is dropped; a request
+  before `Hello`, a wrong version, a second `Hello`, an oversized or unparsable line all close
+  or refuse as tested. `Ping` is answered by the pipe itself. The first instance uses
+  `FILE_FLAG_FIRST_PIPE_INSTANCE`, so the service refuses to start if the name is taken.
+  Remote clients are rejected.
+- **Pipe limits (step 11 review):** at most 4 KB before `Hello`; 16 clients in all and 4 per
+  Windows logon session; a client whose message takes over 30 s to write (it stopped reading)
+  is dropped. There is no idle timeout: the UI waits for events for hours. All are fields of
+  `pipe::Limits`, so tests can shorten them.
+- **Clients verify the server (step 11 review):** `pipe::connect` refuses a pipe whose owner is
+  not SYSTEM or Administrators. While the service is stopped any user could create the name,
+  and the UI would otherwise send that impostor its credentials.
+- **A failed pipe stops the service** with service-specific code 2, and `install` enables the
+  restart actions for non-crash failures, so the SCM restarts it rather than reporting RUNNING.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -343,4 +370,8 @@ Still open:
 - **2026-10-07:** the Windows PC is set up (Rust 1.99, Build Tools, Hyper-V access without
   elevation). Step 10's code and step 26 landed on `feature/service-shell`; 130 tests pass
   on Windows. The `th-test` VM doesn't exist yet, so step 10's VM check is pending.
-- **Next:** build `th-test` (DEVELOPMENT.md §2–3), run step 10's VM check, then step 11.
+- **2026-10-07:** step 10 merged (PR #6, VM check still pending). Step 11 landed on
+  `feature/pipe-server`.
+- **Next:** build `th-test` (DEVELOPMENT.md §2–3) and run step 10's VM check. Installing the
+  service now also opens the pipe, and `sc qfailure TunnelHop` plus `sc qfailureflag TunnelHop`
+  should show the restart actions with the non-crash flag set. Then step 12.

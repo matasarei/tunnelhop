@@ -4,6 +4,8 @@
 
 pub mod credentials;
 pub mod logging;
+#[cfg(windows)]
+pub mod pipe;
 pub mod runtimes;
 pub mod store;
 #[cfg(windows)]
