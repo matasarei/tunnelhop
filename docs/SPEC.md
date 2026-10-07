@@ -120,7 +120,7 @@ Schema: [`manifest.schema.json`](manifest.schema.json).
 | `rotation` | Optional; every field has a default. |
 | `rotation.enabled` | Default `true`. |
 | `rotation.strategy` | `"random"` (the only value in v1). |
-| `rotation.interval_minutes` | 1–1440, default 15. |
+| `rotation.interval_minutes` | 1–1440, default 60. |
 | `rotation.on_disconnect` | `"reconnect_same"`, `"reconnect_random"` (default) or `"stay_down"`. |
 | `rotation.reconnect_grace_seconds` | 5–300, default 20. How long a tunnel may stay in a reconnecting state before it counts as down. |
 | `profiles` | 1–500 entries. |
@@ -185,6 +185,34 @@ Each config must contain at least one `remote`.
 
 **Endpoints** of every profile (`Endpoint` for WireGuard; `remote host [port] [proto]` for
 OpenVPN, with `port` and `proto` defaults applied) are extracted at import for the kill-switch.
+
+### 3.5 Managing and editing bundles
+
+- **Listing.** The service reports every installed bundle (id, name, profiles) and which one is
+  active.
+- **Deleting** removes the bundle's directory and its stored credentials. Deleting the active
+  bundle disconnects first and leaves no bundle active.
+- **At most 20 bundles** are installed at once; importing a 21st is refused with "delete a
+  bundle first".
+- **Editing servers.** A bundle stays immutable: its id is the hash of its zip. Adding or removing
+  servers therefore produces a **new bundle**, which replaces the old one:
+  1. **Add:** the user gives one or more `.conf` (WireGuard) or `.ovpn` (OpenVPN) files, the
+     protocol following the extension, each with a display name (default: the file name). The
+     profile id is derived from the file name, made to match `^[a-z0-9-]{1,40}$` and unique
+     within the bundle (`-2`, `-3`, … on a clash). A protocol not yet in an explicit
+     `protocols` list is added to it.
+  2. **Remove:** by profile id. A bundle keeps at least one profile.
+  3. The service rebuilds the zip from the bundle's installed manifest and configs plus the
+     change, deterministically (the same edit gives the same zip), and imports it through
+     §3.3 and §3.4 unchanged: every check an imported bundle passes, an edited one passes too.
+  4. Stored credentials move to the new id: the bundle default, and each surviving profile's
+     own. A profile added with a bare `auth-user-pass` asks for credentials like an imported
+     one (§3.4).
+  5. The old bundle is deleted. If it was active, the new one becomes active. If a tunnel was
+     up, the service rotates into the new bundle without lifting the kill-switch: an edit never
+     opens a window for traffic outside the tunnel.
+- The UI never reads a bundle's files (they hold private keys); it sends the new files' bytes
+  and receives the result, as an import does.
 
 ---
 
@@ -295,11 +323,19 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
   by drag-and-drop or file picker, with the list of import errors. After an import that left
   OpenVPN profiles without credentials, a prompt asks for them; the profile list marks any
   profile still waiting, with an action to set them.
+  - **Controls:** Connect (a random profile, or the one picked in the profile list), Rotate
+    Now, and Disconnect & unblock.
+  - **Bundles:** every installed bundle, the active one marked; switch to another, or delete one
+    (§3.5).
+  - **Servers:** add `.conf`/`.ovpn` files to the active bundle by picker or drag-and-drop,
+    each with an editable name, and remove a server from the profile list (§3.5).
+  - Errors from the service (a refused import, a failed connect, a rejected edit) show in the
+    window, each with its file and line where there is one.
 - **Tray menu:**
   - Status: `Connected: <profile> (<IP>)`, `Blocked`, or `Disconnected`
   - Rotate Now
   - Auto-Rotation (checkbox)
-  - Interval ▸ 5 min · 15 min · 30 min · 1 hour
+  - Interval ▸ 15 min · 30 min · 1 hour · 2 hours · 4 hours
   - Disconnect & unblock
   - Open Dashboard
   - Exit — disconnects, disengages the kill-switch, and quits the UI

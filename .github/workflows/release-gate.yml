@@ -1,0 +1,57 @@
+name: Release gate
+
+# The kill-switch's dev safety timer must never ship. Its marker string is absent from a release
+# build and present in a dev-safety build, or the check would prove nothing. A ship-blocker that
+# must not depend on anyone's local setup, so it runs here, on Windows, but only when something
+# that goes into th-service.exe changed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/th-core/**"
+      - "crates/th-service/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/release-gate.yml"
+  pull_request:
+    paths:
+      - "crates/th-core/**"
+      - "crates/th-service/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".cargo/**"
+      - ".github/workflows/release-gate.yml"
+
+concurrency:
+  group: release-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  no-dev-safety-timer:
+    name: release build carries no dev safety timer (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Release build carries no dev safety timer
+        shell: bash
+        # One target directory for both builds: the dependencies compile once, and the second
+        # build recompiles only th-service. The release binary is copied aside first, because
+        # the dev-safety build overwrites it.
+        run: |
+          cargo build -p th-service --release
+          cp target/release/th-service.exe release.exe
+          cargo build -p th-service --release --features dev-safety
+          if grep -q -a TUNNELHOP_DEV_SAFETY_TIMER release.exe; then
+            echo "::error::the release build contains the dev safety timer"; exit 1
+          fi
+          if ! grep -q -a TUNNELHOP_DEV_SAFETY_TIMER target/release/th-service.exe; then
+            echo "::error::the dev-safety build lacks the marker, so the check above proves nothing"; exit 1
+          fi
+          echo "release build: no dev safety timer"

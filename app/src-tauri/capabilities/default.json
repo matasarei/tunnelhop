@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The dashboard: listens to the app's events and calls its own commands. Nothing else.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

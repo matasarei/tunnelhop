@@ -60,11 +60,20 @@ After the reboot, in a normal PowerShell:
 ```powershell
 git clone git@github.com:matasarei/tunnelhop.git
 cd tunnelhop
+git config core.hooksPath .githooks   # the full check before every push
+cd app; npm ci; npm run build; cd ..  # the app embeds its built frontend
 cargo test --workspace     # rustup installs the pinned toolchain (rust-toolchain.toml) on first use
 ```
 
-Every test should pass, the same as CI. (Windows runs one fewer than Linux: a symlink test in
-`th-core` is Unix-only.) Then install Claude Code and the `gku` plugin, and open it in the repo.
+Every test should pass. (Windows runs one fewer than Linux: a symlink test in `th-core` is
+Unix-only.) Then install Claude Code and the `gku` plugin, and open it in the repo.
+
+**Checks run locally, not in CI.** `.githooks/pre-push` runs fmt, the app's type check, clippy
+and every test before each push; it takes about a minute, against ~16 minutes for a cold
+Windows CI build billed at twice the Linux rate. CI keeps only what a developer's machine
+cannot vouch for: `th-core` on Linux (about a minute) and, when service code changes, the
+Windows release gate (the release binary must not contain the dev safety timer). Both have
+hard timeouts (5 and 10 minutes), and a new push cancels the run of the previous one.
 
 If the Windows display language isn't English, local group names are translated. Refer to
 groups by SID instead (`S-1-5-32-578` is Hyper-V Administrators), and add your account to that
@@ -252,6 +261,28 @@ Restore-VMCheckpoint -VMName th-test -Name clean -Confirm:$false  # back to a fr
 
 **Shutting down when you're done:** `Stop-VM th-test`, and `docker compose stop` in
 `test-infra/`. When the VM is off, Hyper-V uses no CPU or memory for it.
+
+### The app in the VM (step 17 on)
+
+```powershell
+# On the PC: build with the Tauri CLI. A plain `cargo build` points the window at the dev
+# server (localhost:1420), and the window shows "connection refused".
+cd app; npx tauri build --no-bundle; cd ..          # -> target\release\th-app.exe
+```
+
+- **Run it from `C:\Program Files\TunnelHop\`**, not from `C:\th`. `C:\th` is locked to
+  SYSTEM and Administrators, so an unelevated app cannot even read its own exe there (the
+  launch fails with 0x80070005).
+- **Start it unelevated on the VM's desktop:** someone must be signed in to the console
+  (`user`/`user`). Then register a task once, with
+  `New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\user" -LogonType Interactive
+  -RunLevel Limited` and the exe as its action, and start it with `Start-ScheduledTask`. That
+  runs the app in the user's session with the normal, non-admin token, as a real launch would.
+- **To see the VM's screen without the Hyper-V window:** `GetVirtualSystemThumbnailImage` on
+  `Msvm_VirtualSystemManagementService` returns the display as RGB565, with 4 bytes of padding
+  at the end. A black image means the display is asleep: send a key through `Msvm_Keyboard`.
+- The "Config files not found" pop-up at sign-in is OpenVPN GUI, installed with OpenVPN. It is
+  not TunnelHop's; disable it under Task Manager → Startup apps.
 
 ## 6. The leak test (steps 14 and 16)
 

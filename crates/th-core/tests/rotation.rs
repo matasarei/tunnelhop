@@ -391,8 +391,9 @@ async fn the_timer_follows_the_interval_and_user_overrides_win() {
     let t0 = rig.now;
     assert!(!rig.rotator.due(t0), "nothing to rotate while disconnected");
     rig.rotate().await.unwrap();
-    assert!(!rig.rotator.due(t0 + Duration::from_secs(14 * 60)));
-    assert!(rig.rotator.due(t0 + Duration::from_secs(15 * 60)));
+    // The manifest sets no interval: the default, 60 minutes (SPEC §3.2), applies.
+    assert!(!rig.rotator.due(t0 + Duration::from_secs(59 * 60)));
+    assert!(rig.rotator.due(t0 + Duration::from_secs(60 * 60)));
 
     rig.rotator.set_overrides(Overrides {
         auto_rotate: None,
