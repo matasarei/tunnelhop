@@ -1,0 +1,34 @@
+#!/bin/sh
+# The full check, before anything leaves this machine. CI runs only what a developer's machine
+# cannot vouch for (.github/workflows); everything else is here, where it is incremental and
+# takes about a minute instead of a cold Windows build. Enable once per clone:
+#
+#   git config core.hooksPath .githooks
+set -e
+cd "$(git rev-parse --show-toplevel)"
+
+step() { printf '\n== pre-push: %s\n' "$*"; }
+
+step "rustfmt"
+cargo fmt --all --check
+
+# The app embeds its built frontend at compile time, so clippy and the tests need it.
+if [ ! -d app/node_modules ]; then
+    step "npm ci (first run)"
+    (cd app && npm ci)
+fi
+if [ ! -f app/build/index.html ]; then
+    step "frontend build (first run)"
+    (cd app && npm run build)
+fi
+
+step "frontend type check"
+(cd app && npm run check)
+
+step "clippy"
+cargo clippy --workspace --all-targets -- -D warnings
+
+step "tests"
+cargo test --workspace
+
+printf '\n== pre-push: all checks passed\n'

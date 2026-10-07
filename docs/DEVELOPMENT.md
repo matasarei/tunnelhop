@@ -60,11 +60,20 @@ After the reboot, in a normal PowerShell:
 ```powershell
 git clone git@github.com:matasarei/tunnelhop.git
 cd tunnelhop
+git config core.hooksPath .githooks   # the full check before every push
+cd app; npm ci; npm run build; cd ..  # the app embeds its built frontend
 cargo test --workspace     # rustup installs the pinned toolchain (rust-toolchain.toml) on first use
 ```
 
-Every test should pass, the same as CI. (Windows runs one fewer than Linux: a symlink test in
-`th-core` is Unix-only.) Then install Claude Code and the `gku` plugin, and open it in the repo.
+Every test should pass. (Windows runs one fewer than Linux: a symlink test in `th-core` is
+Unix-only.) Then install Claude Code and the `gku` plugin, and open it in the repo.
+
+**Checks run locally, not in CI.** `.githooks/pre-push` runs fmt, the app's type check, clippy
+and every test before each push; it takes about a minute, against ~16 minutes for a cold
+Windows CI build billed at twice the Linux rate. CI keeps only what a developer's machine
+cannot vouch for: `th-core` on Linux (about a minute) and, when service code changes, the
+Windows release gate (the release binary must not contain the dev safety timer). Both have
+hard timeouts (5 and 10 minutes), and a new push cancels the run of the previous one.
 
 If the Windows display language isn't English, local group names are translated. Refer to
 groups by SID instead (`S-1-5-32-578` is Hyper-V Administrators), and add your account to that
