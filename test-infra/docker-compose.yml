@@ -1,7 +1,10 @@
 # TunnelHop test servers, run by Docker Desktop on the PC. The test VM reaches them through the
-# lab switch: the VPN servers at 192.168.77.1, the "what's my IP" endpoint at 192.168.77.2.
+# lab switch: the VPN servers at 192.168.77.1, the "what's my IP" endpoint at 198.18.77.2,
+# an address the PC also holds on th-lab but that is not on the lab subnet (see README.md).
 # Ports are published on those lab addresses only, never on the PC's other networks, so the
 # th-lab switch (DEVELOPMENT.md section 2) must exist before `up`.
+# WireGuard is published on 41820 and 41821: Windows reserves blocks of the dynamic range
+# (49152 and up) for Hyper-V and WinNAT, and 51820/51821 often fall inside one.
 # See README.md.
 #
 #   docker compose run --rm gen     # once: keys, server configs (data/) and client configs (out/)
@@ -19,7 +22,7 @@ x-server: &server
   restart: unless-stopped
 
 x-probe: &probe
-  PROBE_ADDRESS: ${PROBE_ADDRESS:-192.168.77.2}
+  PROBE_ADDRESS: ${PROBE_ADDRESS:-198.18.77.2}
   WHATSMYIP: 172.31.77.10
 
 services:
@@ -31,7 +34,7 @@ services:
       TUNNEL_ADDRESS: 10.77.1.1/24
       TUNNEL_SUBNET: 10.77.1.0/24
     volumes: ["./data/wg-a:/data:ro"]
-    ports: ["${SERVER_ADDRESS:-192.168.77.1}:51820:51820/udp"]
+    ports: ["${SERVER_ADDRESS:-192.168.77.1}:41820:51820/udp"]
     networks:
       lab: { ipv4_address: 172.31.77.11 }
 
@@ -43,7 +46,7 @@ services:
       TUNNEL_ADDRESS: 10.77.2.1/24
       TUNNEL_SUBNET: 10.77.2.0/24
     volumes: ["./data/wg-b:/data:ro"]
-    ports: ["${SERVER_ADDRESS:-192.168.77.1}:51821:51821/udp"]
+    ports: ["${SERVER_ADDRESS:-192.168.77.1}:41821:51821/udp"]
     networks:
       lab: { ipv4_address: 172.31.77.12 }
 
@@ -63,7 +66,7 @@ services:
   whatsmyip:
     build: .
     command: [whatsmyip]
-    ports: ["${PROBE_ADDRESS:-192.168.77.2}:8080:8080/tcp"]
+    ports: ["${PROBE_ADDRESS:-198.18.77.2}:8080:8080/tcp"]
     restart: unless-stopped
     networks:
       lab: { ipv4_address: 172.31.77.10 }

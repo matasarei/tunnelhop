@@ -18,9 +18,9 @@ rm -rf "$data" "$out"
 mkdir -p "$data/wg-a" "$data/wg-b" "$data/ovpn" "$out"
 umask 077
 
-# wireguard <name> <port> <third octet>
+# wireguard <name> <port inside the container> <port published on the PC> <third octet>
 wireguard() {
-    name=$1 port=$2 net=$3
+    name=$1 port=$2 published=$3 net=$4
     server_key=$(wg genkey)
     client_key=$(wg genkey)
     cat >"$data/$name/wg0.conf" <<EOF
@@ -36,18 +36,18 @@ EOF
 [Interface]
 PrivateKey = $client_key
 Address = 10.77.$net.2/32
-DNS = 1.1.1.1
+DNS = 8.8.8.8, 1.1.1.1
 
 [Peer]
 PublicKey = $(printf '%s' "$server_key" | wg pubkey)
 AllowedIPs = 0.0.0.0/0, ::/0
-Endpoint = $server:$port
+Endpoint = $server:$published
 PersistentKeepalive = 25
 EOF
 }
 
-wireguard wg-a 51820 1
-wireguard wg-b 51821 2
+wireguard wg-a 51820 41820 1
+wireguard wg-b 51821 41821 2
 
 # OpenVPN: a throwaway CA, a server and a client certificate, and a tls-crypt key.
 pki=$(mktemp -d)
@@ -82,6 +82,7 @@ dh none
 tls-crypt /data/tls-crypt.key
 data-ciphers AES-256-GCM:CHACHA20-POLY1305
 push "redirect-gateway def1"
+push "dhcp-option DNS 8.8.8.8"
 push "dhcp-option DNS 1.1.1.1"
 keepalive 10 60
 persist-key
