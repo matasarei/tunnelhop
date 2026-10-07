@@ -15,6 +15,7 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::bundle::MAX_ZIP_BYTES;
 use crate::manifest::Protocol;
@@ -66,8 +67,9 @@ pub enum Request {
     },
 }
 
-/// A value that must never reach a log: `Debug` prints a placeholder.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A value that must never reach a log: `Debug` prints a placeholder, and the memory is wiped
+/// when the value is dropped.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub struct Secret(String);
 
@@ -121,11 +123,7 @@ impl Request {
 }
 
 fn check_bundle_id(id: &str) -> Result<(), IpcError> {
-    let valid = id.len() == 16
-        && id
-            .bytes()
-            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-    if valid {
+    if crate::bundle::BundleId::parse(id).is_some() {
         Ok(())
     } else {
         Err(IpcError::Invalid(

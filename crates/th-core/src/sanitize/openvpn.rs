@@ -6,6 +6,8 @@
 //! dropped — so a directive cannot hide from the allowlist behind quoting.
 
 use super::{Credentials, Endpoint, SanitizedConfig, Transport, is_valid_host, parse_port};
+use zeroize::Zeroizing;
+
 use crate::bundle::ImportError;
 
 const DEFAULT_PORT: u16 = 1194;
@@ -358,8 +360,10 @@ fn read_credentials(
     };
     let bytes = read(&full)
         .ok_or_else(|| format!("auth-user-pass file \"{full}\" is not in the archive"))?;
-    let text = String::from_utf8(bytes)
-        .map_err(|_| format!("auth-user-pass file \"{full}\" is not valid UTF-8"))?;
+    let text = Zeroizing::new(
+        String::from_utf8(bytes)
+            .map_err(|_| format!("auth-user-pass file \"{full}\" is not valid UTF-8"))?,
+    );
     let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
     match (lines.next(), lines.next()) {
         (Some(username), Some(password)) if !username.is_empty() && !password.is_empty() => {
