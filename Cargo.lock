@@ -1779,6 +1779,7 @@ dependencies = [
  "async-trait",
  "humantime",
  "log",
+ "rand 0.10.3",
  "reqwest",
  "serde",
  "serde_json",
@@ -1789,6 +1790,7 @@ dependencies = [
  "windows-service",
  "windows-sys 0.61.2",
  "zeroize",
+ "zip",
 ]
 
 [[package]]

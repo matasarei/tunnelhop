@@ -137,6 +137,9 @@ pub struct Settings {
     pub selected_profile: Option<String>,
     pub auto_rotate: Option<bool>,
     pub interval_minutes: Option<u32>,
+    /// Where the public-IP probe asks, in order; `None` means ipify, then ipinfo. Tests point
+    /// it at the lab's own endpoint. Read when the service starts.
+    pub probe_urls: Option<Vec<String>>,
 }
 
 impl Settings {
@@ -179,6 +182,13 @@ impl Settings {
         {
             self.interval_minutes = None;
         }
+        if let Some(urls) = &mut self.probe_urls {
+            urls.retain(|u| crate::probe::is_valid_url(u));
+            urls.truncate(crate::probe::MAX_URLS);
+            if urls.is_empty() {
+                self.probe_urls = None;
+            }
+        }
         self
     }
 }
@@ -218,6 +228,7 @@ mod tests {
             selected_profile: Some("ua-wg-01".into()),
             auto_rotate: Some(false),
             interval_minutes: Some(60),
+            probe_urls: Some(vec!["http://198.18.77.2:8080/".into()]),
         };
         settings.save(&path).unwrap();
         assert_eq!(Settings::load(&path).unwrap(), settings);
@@ -242,6 +253,23 @@ mod tests {
                 ..Settings::default()
             }
         );
+    }
+
+    #[test]
+    fn probe_urls_keep_only_valid_ones_and_at_most_four() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{"probe_urls":["file:///C:/x","http://a/","https://b/","http://c/",
+                "http://d/","http://e/"]}"#,
+        )
+        .unwrap();
+        let urls = Settings::load(&path).unwrap().probe_urls.unwrap();
+        assert_eq!(urls, ["http://a/", "https://b/", "http://c/", "http://d/"]);
+
+        fs::write(&path, r#"{"probe_urls":["ftp://x/"]}"#).unwrap();
+        assert_eq!(Settings::load(&path).unwrap().probe_urls, None);
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub mod credentials;
 pub mod drivers;
 pub mod killswitch;
 pub mod logging;
+pub mod orchestrator;
 #[cfg(windows)]
 pub mod pipe;
 pub mod probe;
