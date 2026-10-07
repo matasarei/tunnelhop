@@ -1,14 +1,15 @@
 //! The Windows service: registration with the service control manager, and the control handler
 //! (STOP and PRESHUTDOWN) — SPEC §6.
 
+use std::collections::HashMap;
 use std::error::Error;
 use std::ffi::OsString;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use th_core::ipc::{Request, Response, RuntimeInfo, StatusReport};
-use th_core::rotation::State;
-use tokio::sync::{broadcast, oneshot};
+use th_core::driver::VpnDriver;
+use th_core::manifest::Protocol;
+use tokio::sync::oneshot;
 use windows_service::service::{
     ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
     ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod,
@@ -18,8 +19,13 @@ use windows_service::service_control_handler::{self, ServiceControlHandlerResult
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 use windows_service::{define_windows_service, service_dispatcher};
 
+use crate::credentials::{CredentialStore, Dpapi};
+use crate::drivers::wireguard::WireguardDriver;
+use crate::killswitch::WfpKillSwitch;
 use crate::logging;
-use crate::pipe::{Handler, Listener, PIPE_NAME};
+use crate::orchestrator::{Orchestrator, Parts};
+use crate::pipe::{Listener, PIPE_NAME};
+use crate::probe::HttpProbe;
 use crate::runtimes::{self, Runtime};
 use crate::store::{self, Layout, Settings};
 
@@ -29,6 +35,8 @@ const DESCRIPTION: &str = "Rotates WireGuard and OpenVPN tunnels and keeps traff
                            it switches.";
 const SERVICE_TYPE: ServiceType = ServiceType::OWN_PROCESS;
 const STOP_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long disconnecting may take while the service stops; the SCM waits about as long.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(20);
 
 define_windows_service!(ffi_service_main, service_main);
 
@@ -151,12 +159,20 @@ fn run_service() -> Result<(), Box<dyn Error>> {
 /// What runs while the service is up.
 struct Running {
     runtime: tokio::runtime::Runtime,
+    orchestrator: Arc<Orchestrator<Dpapi>>,
+    watch: tokio::task::JoinHandle<()>,
     stop_pipe: oneshot::Sender<()>,
     pipe: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 
 impl Running {
+    /// SPEC §6: bring the tunnel down and lift the block, then stop serving.
     fn stop(self) {
+        self.watch.abort();
+        let shutdown = tokio::time::timeout(SHUTDOWN_TIMEOUT, self.orchestrator.shutdown());
+        if self.runtime.block_on(shutdown).is_err() {
+            log::error!("disconnecting took too long; stopping anyway");
+        }
         let _ = self.stop_pipe.send(());
         match self.runtime.block_on(self.pipe) {
             Ok(Ok(())) => {}
@@ -164,34 +180,6 @@ impl Running {
             Err(e) => log::error!("the pipe server panicked: {e}"),
         }
         self.runtime.shutdown_timeout(Duration::from_secs(5));
-    }
-}
-
-/// Answers what the service can answer before the orchestrator exists (step 14).
-struct ShellHandler {
-    settings: Settings,
-    runtimes: Vec<RuntimeInfo>,
-}
-
-impl Handler for ShellHandler {
-    async fn handle(&self, request: Request) -> Response {
-        match request {
-            Request::GetStatus => Response::Status {
-                report: StatusReport {
-                    state: State::Disconnected,
-                    profile_id: None,
-                    public_ip: None,
-                    killswitch_engaged: false,
-                    bundle: None,
-                    auto_rotate: self.settings.auto_rotate.unwrap_or(true),
-                    interval_minutes: self.settings.interval_minutes.unwrap_or(15),
-                    runtimes: self.runtimes.clone(),
-                },
-            },
-            _ => Response::Error {
-                message: "this version of the service cannot do that yet".into(),
-            },
-        }
     }
 }
 
@@ -231,15 +219,47 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
         .build()?;
     // Binding fails if something already holds the pipe name; the service must not start then.
     let listener = runtime.block_on(async { Listener::bind(PIPE_NAME) })?;
-    let handler = Arc::new(ShellHandler {
+
+    let mut drivers: HashMap<Protocol, Arc<dyn VpnDriver>> = HashMap::new();
+    for runtime_found in &runtimes {
+        if runtime_found.protocol == Protocol::Wireguard && runtime_found.is_available() {
+            let driver = WireguardDriver::new(runtime_found, layout.tunnels())?;
+            drivers.insert(Protocol::Wireguard, Arc::new(driver));
+        }
+        // OpenVPN arrives with its driver (step 16).
+    }
+    let killswitch_engaged = WfpKillSwitch::is_engaged().unwrap_or_else(|e| {
+        log::error!("cannot tell whether the kill-switch is engaged: {e}");
+        false
+    });
+    if killswitch_engaged {
+        log::warn!("the kill-switch was left engaged; traffic stays blocked");
+    }
+    let probe = HttpProbe::new(settings.probe_urls.clone())?;
+    let parts = Parts {
+        credentials: CredentialStore::new(layout.credentials(), Dpapi),
+        layout,
         settings,
         runtimes: runtimes.iter().map(Runtime::info).collect(),
-    });
-    let (events, _) = broadcast::channel(64);
+        drivers,
+        killswitch: Arc::new(WfpKillSwitch::new()),
+        killswitch_engaged,
+        probe: Arc::new(probe),
+        seed: None,
+    };
+    let orchestrator = runtime.block_on(Orchestrator::start(parts));
+    let watch = {
+        let _context = runtime.enter();
+        orchestrator.spawn_watch()
+    };
+
     let (stop_pipe, stopped) = oneshot::channel();
-    let server = runtime.spawn(listener.serve(handler, events, async {
-        let _ = stopped.await;
-    }));
+    let server =
+        runtime.spawn(
+            listener.serve(orchestrator.clone(), orchestrator.events(), async {
+                let _ = stopped.await;
+            }),
+        );
     let pipe = runtime.spawn(async move {
         let result = match server.await {
             Ok(result) => result,
@@ -253,6 +273,8 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
     log::info!("listening on {PIPE_NAME}");
     Ok(Running {
         runtime,
+        orchestrator,
+        watch,
         stop_pipe,
         pipe,
     })

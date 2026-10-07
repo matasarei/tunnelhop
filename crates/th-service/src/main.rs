@@ -14,13 +14,18 @@ fn main() -> std::process::ExitCode {
   uninstall   stop and remove the service and its data (administrator)
   disengage   remove the kill-switch filters (administrator)
   runtimes    show the installed WireGuard and OpenVPN versions
+  ctl ...     drive the running service (th-service ctl, for its commands)
   run         used by the service control manager";
 
     let arguments: Vec<String> = std::env::args().skip(1).collect();
-    let [command] = arguments.as_slice() else {
+    let Some((command, rest)) = arguments.split_first() else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
+    if command != "ctl" && !rest.is_empty() {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
     if command != "run" {
         logging::to_stderr();
     }
@@ -48,6 +53,7 @@ fn main() -> std::process::ExitCode {
             }
             Ok(())
         }
+        "ctl" => th_service::ctl::run(rest),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
