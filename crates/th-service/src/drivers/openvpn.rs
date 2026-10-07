@@ -383,7 +383,16 @@ mod driver {
                         servers,
                     },
                 );
-            debug_assert!(previous.is_none(), "connect stops a running tunnel first");
+            // connect() stops a tunnel of the same name first, and the engine never connects
+            // twice at once, so this is a broken invariant rather than a path. Its supervisor
+            // goes first, or the old process's exit would read as this tunnel being lost; its
+            // job then ends the process. No SIGTERM: OpenVPN would remove the host route to the
+            // server on its way out, which the new tunnel shares.
+            if let Some(previous) = previous {
+                log::error!("{tunnel} was already running; ending the older openvpn.exe");
+                previous.supervisor.abort();
+                drop(previous.job);
+            }
             Ok(TunnelHandle {
                 profile_id: profile.profile_id.clone(),
                 protocol: Protocol::Openvpn,
