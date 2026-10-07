@@ -39,7 +39,7 @@ crates/th-service/            # Windows only (cfg(windows)); stub main elsewhere
   src/probe.rs                # HTTPS IP probe (reqwest + rustls)
   src/orchestrator.rs         # rotation engine + drivers + kill-switch + timers + pipe events
 app/                          # Tauri v2 + Svelte 5 + Vite, runs unelevated
-test-infra/                   # WireGuard + OpenVPN test servers (docker compose, run in the servers VM)
+test-infra/                   # WireGuard + OpenVPN test servers (docker compose, in Docker Desktop on the PC)
 docs/TESTING.md               # the full manual acceptance procedure (step 19)
 ```
 
@@ -185,7 +185,7 @@ step (or per closely related pair), opened as a PR against `main`.
     - `scripts/vm.ps1`: build, copy into `th-test` over PowerShell Direct, run a test,
       checkpoint, restore.
     - Test: unit tests for the config-copy `Endpoint` rewrite. In the test VM:
-      `cargo test -p th-service --test wg_live -- --ignored` against the servers VM
+      `cargo test -p th-service --test wg_live -- --ignored` against the test servers
       (connect, service RUNNING, disconnect, service gone).
     - **Landed (2026-10-07), live check pending:** `drivers/wireguard.rs`, `tests/wg_live.rs`,
       `test-infra/` (Dockerfile, compose, `gen.sh`, `server.sh`, `whatsmyip.py`) and
@@ -241,7 +241,7 @@ step (or per closely related pair), opened as a PR against `main`.
     DPAPI, the teardown timeout, and reconnect grace.
     - Create: `crates/th-service/src/drivers/openvpn.rs`
     - Modify: `crates/th-service/src/orchestrator.rs` (register the driver by protocol)
-    - Test: `ovpn_live` (`--ignored`) in the VM against the servers VM, then the leak test
+    - Test: `ovpn_live` (`--ignored`) in the VM against the test servers, then the leak test
       again with mixed-protocol rotation.
     - Note from step 12: a *killed* `openvpn.exe` leaves its routes (`0.0.0.0/1` and
       `128.0.0.0/1` through the dead tunnel, and a host route to the server). Stop it through
