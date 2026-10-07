@@ -296,7 +296,13 @@ mod driver {
                 .kill_on_drop(true)
                 .spawn()
                 .map_err(|e| abandon(failed(format!("cannot start {}", self.exe.display()), e)))?;
-            let pid = child.id().unwrap_or(0);
+            // None only once the process has exited, which a suspended one cannot have; 0 would
+            // name the idle process to the port check and to the resume.
+            let pid = child.id().ok_or_else(|| {
+                abandon(DriverError::Failed(
+                    "openvpn.exe exited before it was started".into(),
+                ))
+            })?;
             // Into the job before it runs a single instruction, then let it go.
             let job = Job::kill_on_close()
                 .and_then(|job| {
