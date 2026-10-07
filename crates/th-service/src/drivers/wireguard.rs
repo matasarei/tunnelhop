@@ -104,8 +104,10 @@ pub use driver::WireguardDriver;
 
 #[cfg(windows)]
 mod driver {
+    use std::collections::HashMap;
     use std::io;
     use std::path::{Path, PathBuf};
+    use std::sync::Mutex;
     use std::time::Duration;
 
     use async_trait::async_trait;
@@ -118,6 +120,7 @@ mod driver {
     use th_core::sanitize::Transport;
     use th_core::tunnel_name::is_ours;
     use tokio::sync::broadcast;
+    use tokio::task::AbortHandle;
     use windows_service::service::{ServiceAccess, ServiceState};
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
     use windows_sys::Win32::Foundation::ERROR_SERVICE_DOES_NOT_EXIST;
@@ -131,11 +134,48 @@ mod driver {
     /// How long the tunnel service may take to start, or to disappear.
     const SERVICE_TIMEOUT: Duration = Duration::from_secs(15);
     const POLL: Duration = Duration::from_millis(200);
+    /// How often a connected tunnel's service is checked for having stopped on its own.
+    const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
     pub struct WireguardDriver {
         exe: PathBuf,
         tunnels: PathBuf,
         events: broadcast::Sender<TunnelEvent>,
+        /// One watcher per connected tunnel, by name. Cancelled before every uninstall, so a
+        /// disconnect the engine asked for never reads as a lost tunnel.
+        watchers: Mutex<HashMap<String, AbortHandle>>,
+    }
+
+    /// What a watcher does after one look at its tunnel's service.
+    #[derive(Debug, PartialEq)]
+    pub(super) enum Watch {
+        Keep,
+        Lost(String),
+    }
+
+    /// The service stopping, or vanishing, is the tunnel lost. Starting and continuing are
+    /// transient; an error reading the state proves nothing either way.
+    pub(super) fn watch(state: Result<Option<ServiceState>, String>) -> Watch {
+        match state {
+            Ok(Some(
+                ServiceState::Running | ServiceState::StartPending | ServiceState::ContinuePending,
+            )) => Watch::Keep,
+            Ok(Some(state)) => Watch::Lost(format!("the tunnel service is {state:?}")),
+            Ok(None) => Watch::Lost("the tunnel service is gone".into()),
+            Err(e) => {
+                log::warn!("cannot check a tunnel's service: {e}");
+                Watch::Keep
+            }
+        }
+    }
+
+    impl Drop for WireguardDriver {
+        fn drop(&mut self) {
+            let watchers = self.watchers.get_mut().unwrap_or_else(|e| e.into_inner());
+            for (_, watcher) in watchers.drain() {
+                watcher.abort();
+            }
+        }
     }
 
     impl WireguardDriver {
@@ -156,7 +196,38 @@ mod driver {
                 exe,
                 tunnels: tunnels.into(),
                 events: broadcast::channel(16).0,
+                watchers: Mutex::default(),
             })
+        }
+
+        /// Report the tunnel lost once its service stops without being asked to.
+        fn watch(&self, tunnel: &str) {
+            let (name, events) = (tunnel.to_string(), self.events.clone());
+            let task = tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(WATCH_INTERVAL).await;
+                    let state = service_state(&name).map_err(|e| e.to_string());
+                    if let Watch::Lost(reason) = watch(state) {
+                        log::warn!("{name} was lost: {reason}");
+                        let _ = events.send(TunnelEvent::Down {
+                            tunnel: name,
+                            reason,
+                        });
+                        return;
+                    }
+                }
+            });
+            let mut watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(previous) = watchers.insert(tunnel.to_string(), task.abort_handle()) {
+                previous.abort();
+            }
+        }
+
+        fn unwatch(&self, tunnel: &str) {
+            let mut watchers = self.watchers.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(watcher) = watchers.remove(tunnel) {
+                watcher.abort();
+            }
         }
 
         fn config_path(&self, tunnel: &str) -> PathBuf {
@@ -228,6 +299,8 @@ mod driver {
         }
 
         async fn uninstall(&self, tunnel: &str) -> Result<(), DriverError> {
+            // First, so the watcher cannot see the service go and call it lost.
+            self.unwatch(tunnel);
             if service_state(tunnel)?.is_some() {
                 self.run(&["/uninstalltunnelservice".as_ref(), tunnel.as_ref()])
                     .await?;
@@ -333,6 +406,7 @@ mod driver {
                     return Err(e);
                 }
             };
+            self.watch(tunnel);
             Ok(TunnelHandle {
                 profile_id: profile.profile_id.clone(),
                 protocol: Protocol::Wireguard,
@@ -359,8 +433,9 @@ mod driver {
             self.events.subscribe()
         }
 
-        /// Every `WireGuardTunnel$th-…` service. The profile id is left empty: the orchestrator
-        /// maps the tunnel name back through `tunnel_name(bundle, profile)`.
+        /// Every `WireGuardTunnel$th-…` service, each watched from here on, since the engine may
+        /// adopt it. The profile id is left empty: the orchestrator maps the tunnel name back
+        /// through `tunnel_name(bundle, profile)`.
         async fn reconcile(&self) -> Result<Vec<TunnelHandle>, DriverError> {
             let services = win::services_with_prefix(&format!("{SERVICE_PREFIX}th-"))
                 .map_err(|e| failed("cannot list services".into(), e))?;
@@ -373,6 +448,7 @@ mod driver {
                 let interface = win::interface_luid(tunnel)
                     .map(InterfaceId)
                     .unwrap_or(InterfaceId(0));
+                self.watch(tunnel);
                 handles.push(TunnelHandle {
                     profile_id: String::new(),
                     protocol: Protocol::Wireguard,
@@ -415,6 +491,54 @@ mod driver {
         #[test]
         fn a_tunnel_that_does_not_exist_has_no_service() {
             assert_eq!(service_state("th-000000000000").unwrap(), None);
+        }
+
+        #[test]
+        fn a_watcher_calls_the_tunnel_lost_only_when_its_service_stops_or_vanishes() {
+            for state in [
+                ServiceState::Running,
+                ServiceState::StartPending,
+                ServiceState::ContinuePending,
+            ] {
+                assert_eq!(watch(Ok(Some(state))), Watch::Keep, "{state:?}");
+            }
+            for state in [
+                ServiceState::Stopped,
+                ServiceState::StopPending,
+                ServiceState::Paused,
+            ] {
+                assert!(
+                    matches!(watch(Ok(Some(state))), Watch::Lost(_)),
+                    "{state:?}"
+                );
+            }
+            assert!(matches!(watch(Ok(None)), Watch::Lost(_)));
+            assert_eq!(watch(Err("access denied".into())), Watch::Keep);
+        }
+
+        #[tokio::test]
+        async fn unwatching_a_tunnel_stops_its_watcher() {
+            let runtime = Runtime {
+                protocol: Protocol::Wireguard,
+                path: Some(PathBuf::from(r"C:\nowhere\wireguard.exe")),
+                availability: Availability::Available {
+                    version: "1.1.1".into(),
+                },
+            };
+            let driver = WireguardDriver::new(&runtime, std::env::temp_dir()).unwrap();
+            let mut events = driver.events();
+            // The tunnel does not exist, so an active watcher would report it lost.
+            driver.watch("th-000000000000");
+            driver.unwatch("th-000000000000");
+            let heard = tokio::time::timeout(WATCH_INTERVAL * 2, events.recv()).await;
+            assert!(heard.is_err(), "an unwatched tunnel produced {heard:?}");
+
+            driver.watch("th-000000000000");
+            let heard = tokio::time::timeout(WATCH_INTERVAL * 2, events.recv()).await;
+            assert!(
+                matches!(heard, Ok(Ok(TunnelEvent::Down { .. }))),
+                "a watched tunnel that is gone was not reported: {heard:?}"
+            );
         }
     }
 }

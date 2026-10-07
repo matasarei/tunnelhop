@@ -10,12 +10,13 @@ use std::net::ToSocketAddrs;
 use std::path::PathBuf;
 
 use th_core::bundle::BundleId;
-use th_core::driver::{ResolvedEndpoint, ResolvedProfile, TunnelStatus, VpnDriver};
+use th_core::driver::{ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelStatus, VpnDriver};
 use th_core::manifest::Protocol;
 use th_core::sanitize::wireguard;
 use th_core::tunnel_name::tunnel_name;
 use th_service::drivers::wireguard::{WireguardDriver, service_name};
 use th_service::{runtimes, win};
+use tokio::time::{Duration, timeout};
 
 fn env_path(name: &str, default: &str) -> PathBuf {
     std::env::var_os(name).map_or_else(|| PathBuf::from(default), PathBuf::from)
@@ -91,11 +92,30 @@ async fn connect_status_reconcile_and_disconnect() {
         .await
         .expect("reconnect over a leftover");
 
+    // A disconnect the engine asked for is not an event.
+    let mut events = driver.events();
     driver.disconnect(&handle).await.expect("disconnect");
     assert_eq!(driver.status(&handle).await.unwrap(), TunnelStatus::Down);
     assert!(!tunnel_services().contains(&service));
+    let heard = timeout(Duration::from_secs(5), events.recv()).await;
+    assert!(heard.is_err(), "a planned disconnect produced {heard:?}");
     driver
         .disconnect(&handle)
         .await
         .expect("disconnect is idempotent");
+
+    // A tunnel stopped behind the driver's back is reported lost.
+    let handle = driver.connect(&profile).await.expect("connect again");
+    let stopped = std::process::Command::new("sc.exe")
+        .args(["stop", &service])
+        .status()
+        .unwrap();
+    assert!(stopped.success(), "sc stop {service}");
+    let heard = timeout(Duration::from_secs(15), events.recv()).await;
+    assert!(
+        matches!(&heard, Ok(Ok(TunnelEvent::Down { tunnel, .. })) if *tunnel == profile.tunnel_name),
+        "a stopped tunnel was not reported: {heard:?}"
+    );
+    driver.disconnect(&handle).await.expect("clean up");
+    assert!(!tunnel_services().contains(&service));
 }
