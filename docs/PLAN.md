@@ -298,11 +298,27 @@ step (or per closely related pair), opened as a PR against `main`.
       server, on the physical interface. The crash test asserts exactly that.
 
 ### M5: UI + installer
-17. [ ] The Tauri app shell: pipe client, tray menu, close-to-tray, and autostart.
+17. [x] The Tauri app shell: pipe client, tray menu, close-to-tray, and autostart.
     - Create: `app/` (`npm create tauri-app@latest`, Svelte + TS),
       `app/src-tauri/src/{pipe_client.rs,tray.rs}`
     - Modify: `Cargo.toml` (add `app/src-tauri` to the workspace)
     - Test: in the VM, by hand: every tray item works, and the UI process is not elevated.
+    - **Landed (2026-10-07):**
+      - `app/` (Tauri 2, Svelte + TypeScript) as the workspace member `th-app`.
+      - `pipe_client.rs`: connects through `th_service::pipe::connect` (owner-verified),
+        reconnects every 2 s, and answers requests at once while the service is down. Tested
+        against a real pipe served by the service's own listener.
+      - `tray.rs`: SPEC §5's menu.
+      - The window (asked for after the first look): the tray's controls in Fluent 2
+        (`@fluentui/web-components`), following Windows' light/dark mode.
+      - Close-to-tray, a single instance, and alerts as notifications.
+      - Autostart: switched on once, at first run, and started hidden.
+      - CI builds the frontend before the workspace.
+    - **Checked in `th-test` by hand:** the app runs unelevated (started with the user's
+      limited token, from `C:\Program Files\TunnelHop`). Every tray item and window control
+      worked, and the window followed the service live, including after a service restart.
+    - **Also from the first look:** the default interval is now 60 minutes, and the menus offer
+      15 min, 30 min, 1 h, 2 h and 4 h. Steps 27 and 28 were added.
 18. [ ] The dashboard and import: drag-and-drop or picker, bytes over the pipe, the error list.
     - Also: when `Imported.needs_credentials` is non-empty, ask once for a username and
       password for all of them. The profile list marks any profile still waiting, with an
@@ -557,4 +573,7 @@ Still open:
 - **2026-10-07:** step 15 merged (PR #11). Step 16, the OpenVPN driver, landed on
   `feature/openvpn-driver`: OpenVPN rotates end to end in `th-test`, and the mixed-protocol
   leak test passes. Also fixed: service stop (a step-14 bug).
-- **Next:** step 17, the Tauri app shell.
+- **2026-10-07:** step 16 merged (PR #12). Step 17, the app shell, landed on
+  `feature/app-shell` and was checked by hand in `th-test`. The default interval became 60
+  minutes, and steps 27 and 28 (bundle management, editing servers) were planned.
+- **Next:** step 18, the dashboard and import; then 27, 28 and 19.

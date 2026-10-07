@@ -253,6 +253,28 @@ Restore-VMCheckpoint -VMName th-test -Name clean -Confirm:$false  # back to a fr
 **Shutting down when you're done:** `Stop-VM th-test`, and `docker compose stop` in
 `test-infra/`. When the VM is off, Hyper-V uses no CPU or memory for it.
 
+### The app in the VM (step 17 on)
+
+```powershell
+# On the PC: build with the Tauri CLI. A plain `cargo build` points the window at the dev
+# server (localhost:1420), and the window shows "connection refused".
+cd app; npx tauri build --no-bundle; cd ..          # -> target\release\th-app.exe
+```
+
+- **Run it from `C:\Program Files\TunnelHop\`**, not from `C:\th`. `C:\th` is locked to
+  SYSTEM and Administrators, so an unelevated app cannot even read its own exe there (the
+  launch fails with 0x80070005).
+- **Start it unelevated on the VM's desktop:** someone must be signed in to the console
+  (`user`/`user`). Then register a task once, with
+  `New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\user" -LogonType Interactive
+  -RunLevel Limited` and the exe as its action, and start it with `Start-ScheduledTask`. That
+  runs the app in the user's session with the normal, non-admin token, as a real launch would.
+- **To see the VM's screen without the Hyper-V window:** `GetVirtualSystemThumbnailImage` on
+  `Msvm_VirtualSystemManagementService` returns the display as RGB565, with 4 bytes of padding
+  at the end. A black image means the display is asleep: send a key through `Msvm_Keyboard`.
+- The "Config files not found" pop-up at sign-in is OpenVPN GUI, installed with OpenVPN. It is
+  not TunnelHop's; disable it under Task Manager → Startup apps.
+
 ## 6. The leak test (steps 14 and 16)
 
 With the service installed in `th-test`, a test bundle imported and selected, the test servers
