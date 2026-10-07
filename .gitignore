@@ -28,3 +28,6 @@ auth.txt
 
 # Test fixtures are fake VPN material and must stay tracked (keep this last).
 !crates/**/tests/fixtures/**
+
+# Per-developer tool profile
+.claude/repo-profile.json

@@ -37,6 +37,15 @@ impl BundleId {
         BundleId(hex[..16].to_string())
     }
 
+    /// An id received from elsewhere (the UI, a file name): 16 lowercase hex characters.
+    pub fn parse(id: &str) -> Option<Self> {
+        let valid = id.len() == 16
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        valid.then(|| BundleId(id.to_string()))
+    }
+
     pub fn as_str(&self) -> &str {
         &self.0
     }

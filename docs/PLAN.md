@@ -149,6 +149,15 @@ step (or per closely related pair), opened as a PR against `main`.
     - Test: unit tests for version parsing and the credential store's key layout. In the
       test VM: `th-service install`, `sc query TunnelHop` shows RUNNING, and `icacls` on
       `%ProgramData%\TunnelHop` matches.
+    - **Landed (2026-10-07), VM check pending:** `crates/th-service` is now a library plus
+      `main.rs`, with `svc.rs` (SCM registration, STOP/PRESHUTDOWN, restart on crash),
+      `store.rs` (layout, ACLs, `settings.json`), `credentials.rs` (DPAPI store,
+      `has_credentials`), `runtimes.rs`, `logging.rs`, and `win.rs` (every `unsafe` Win32
+      call). `Secret` and `Credentials` in `th-core` are zeroized on drop. 130 tests pass on
+      the PC; `th-service runtimes`, `run` from a console, and an unelevated `install` behave.
+      Still to do in `th-test`: `install`, `sc query TunnelHop` RUNNING, `icacls` on the store
+      and on `secrets\`, `uninstall`, and the elevated
+      `cargo test -p th-service --lib -- --ignored` (`prepare` replacing a planted junction).
 11. [ ] The named pipe server with SDDL, dispatching `th_core::ipc` requests.
     - Create: `crates/th-service/src/pipe.rs`, `crates/th-service/tests/pipe.rs`
       (`#[cfg(windows)]`)
@@ -250,7 +259,8 @@ step (or per closely related pair), opened as a PR against `main`.
 24. [x] OpenVPN credentials when the config has none (core part). The service, management and
     UI parts are folded into steps 10, 15 and 18.
 25. [x] Rotations must change the public IP (engine). The service part is folded into step 14.
-26. [ ] `Secret` wipes its memory on drop. Folded into step 10.
+26. [x] `Secret` wipes its memory on drop — `zeroize` on `ipc::Secret` and
+    `sanitize::Credentials`, and on the `auth.txt` text while it's parsed (step 10's branch).
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
@@ -305,6 +315,21 @@ Implementation rulings worth knowing (full text in the commit bodies):
 - **Credentials over IPC** are refused if they contain CR, LF or NUL or exceed 256 characters.
   Profile ids follow the manifest's `^[a-z0-9-]{1,40}$`.
 - **Protocol version** stays 1 until something speaking it ships.
+- **Store ACLs (step 10):** the root and `secrets\` are created with their DACL already set,
+  so they're never briefly open to what `ProgramData` grants. Each start re-applies the DACLs.
+  A pre-existing root that is a link, or is owned by anyone but SYSTEM, Administrators or the
+  service, is treated as planted: it's deleted and created again. Owners aren't changed.
+- **Credential files (step 10):** `secrets\credentials\<bundle_id>\bundle.cred` holds the
+  bundle-wide default (`SetCredentials` with no profiles); `profile.<id>.cred` holds one
+  profile's credentials and wins over the default. Each is DPAPI under the service's account
+  with fixed extra entropy, and never `CRYPTPROTECT_LOCAL_MACHINE`. Ids are re-validated
+  before they become file names.
+- **Runtimes (step 10):** an executable whose version can't be read counts as "too old"
+  (found `unknown`), which disables its protocol. `th-service runtimes` prints what was found.
+- **`settings.json`:** unknown fields are ignored, and invalid values are dropped one by one.
+- **`disengage`** is a no-op until step 13 gives it a kill-switch to remove.
+- **`install` registers the executable where it is.** It must sit in a directory only
+  administrators can write (Program Files; `C:\th` in the VM is locked down for this).
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -315,4 +340,7 @@ Still open:
 ## Progress
 - **2026-10-06:** steps 1–9 merged (PR #1). The Proton allowlist merged (PR #2). Steps 24–25
   core merged (PRs #3, #4). 103 tests pass on Linux and Windows CI.
-- **Next:** step 10, on the Windows PC (see DEVELOPMENT.md for setup).
+- **2026-10-07:** the Windows PC is set up (Rust 1.99, Build Tools, Hyper-V access without
+  elevation). Step 10's code and step 26 landed on `feature/service-shell`; 130 tests pass
+  on Windows. The `th-test` VM doesn't exist yet, so step 10's VM check is pending.
+- **Next:** build `th-test` (DEVELOPMENT.md §2–3), run step 10's VM check, then step 11.

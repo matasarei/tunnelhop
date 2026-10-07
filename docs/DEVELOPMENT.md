@@ -62,8 +62,16 @@ cd tunnelhop
 cargo test --workspace     # rustup installs the pinned toolchain (rust-toolchain.toml) on first use
 ```
 
-All 103 tests should pass, the same as CI. Then install Claude Code and the `gku` plugin, and
-open it in the repo.
+Every test should pass, the same as CI. (Windows runs one fewer than Linux: a symlink test in
+`th-core` is Unix-only.) Then install Claude Code and the `gku` plugin, and open it in the repo.
+
+If the Windows display language isn't English, local group names are translated. Refer to
+groups by SID instead (`S-1-5-32-578` is Hyper-V Administrators), and add your account to that
+group so Claude Code can drive the VMs without running elevated:
+
+```powershell
+Add-LocalGroupMember -SID S-1-5-32-578 -Member "$env:USERDOMAIN\$env:USERNAME"   # then sign out and in
+```
 
 ## 2. The lab network
 
@@ -110,6 +118,8 @@ The switch has no DHCP, so each VM gets a static address, gateway 192.168.77.1, 
    winget install --id WireGuard.WireGuard -e
    winget install --id OpenVPNTechnologies.OpenVPN -e
    New-Item -ItemType Directory C:\th | Out-Null
+   # The service runs as LocalSystem from here: standard users must not be able to replace it.
+   icacls C:\th /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
    ```
 5. Back on the PC, store the VM's credential once. It's encrypted for your Windows user and
    kept outside the repo:

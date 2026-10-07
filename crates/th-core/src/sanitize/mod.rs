@@ -7,6 +7,8 @@
 use std::fmt;
 use std::net::IpAddr;
 
+use zeroize::{Zeroize, ZeroizeOnDrop};
+
 use crate::bundle::ImportError;
 use crate::manifest::Protocol;
 
@@ -28,8 +30,9 @@ pub struct Endpoint {
     pub transport: Transport,
 }
 
-/// OpenVPN username and password moved out of the bundle's `auth-user-pass` file.
-#[derive(Clone, PartialEq, Eq)]
+/// OpenVPN username and password moved out of the bundle's `auth-user-pass` file. Both are
+/// wiped from memory on drop.
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct Credentials {
     pub username: String,
     pub password: String,

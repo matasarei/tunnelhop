@@ -343,3 +343,14 @@ fn passwords_never_appear_in_debug_output() {
     assert!(!printed.contains("hunter2-secret"), "{printed}");
     assert!(printed.contains("<redacted>"));
 }
+
+#[test]
+fn secrets_are_wiped_when_dropped() {
+    fn wiped_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+    wiped_on_drop::<ipc::Secret>();
+    wiped_on_drop::<th_core::sanitize::Credentials>();
+
+    let mut secret = ipc::Secret::new("hunter2");
+    zeroize::Zeroize::zeroize(&mut secret);
+    assert_eq!(secret.expose(), "");
+}

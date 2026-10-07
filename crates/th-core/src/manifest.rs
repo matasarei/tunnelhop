@@ -228,7 +228,9 @@ fn check_name(field: &str, value: &str, errors: &mut Vec<ManifestError>) {
     }
 }
 
-pub(crate) fn is_valid_id(id: &str) -> bool {
+/// A profile id: `^[a-z0-9-]{1,40}$`. Ids become file names in the service, so nothing else
+/// is let in.
+pub fn is_valid_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= MAX_ID_CHARS
         && id

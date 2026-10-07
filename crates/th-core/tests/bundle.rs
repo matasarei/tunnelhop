@@ -91,6 +91,22 @@ fn different_zips_get_different_ids() {
 }
 
 #[test]
+fn bundle_ids_parse_only_in_their_own_shape() {
+    let id = BundleId::of(&valid_bundle(vec![]));
+    assert_eq!(BundleId::parse(id.as_str()), Some(id));
+    for bad in [
+        "",
+        "0123456789abcde",
+        "0123456789abcdef0",
+        "0123456789ABCDEF",
+        "0123456789abcdeg",
+        "../456789abcdef0",
+    ] {
+        assert_eq!(BundleId::parse(bad), None, "{bad:?}");
+    }
+}
+
+#[test]
 fn garbage_is_not_a_zip() {
     assert_refused(b"definitely not a zip", "not a valid zip archive");
 }
