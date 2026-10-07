@@ -117,6 +117,13 @@ async fn a_missing_service_is_reported_and_the_client_reconnects_when_it_returns
         next(&mut heard).await,
         Update::Disconnected(NOT_RUNNING.into())
     );
+    // Retrying every 100 ms, the same failure is reported once, not on every attempt: the app
+    // would otherwise log and redraw for as long as the service is down.
+    let quiet = timeout(Duration::from_millis(500), heard.recv()).await;
+    assert!(
+        quiet.is_err(),
+        "the same failure was reported again: {quiet:?}"
+    );
     // Answered at once rather than queued until some later connection.
     let answer = timeout(Duration::from_secs(1), client.request(Request::GetStatus))
         .await

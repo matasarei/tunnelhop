@@ -77,10 +77,24 @@ async fn run(
     mut requests: mpsc::Receiver<(Request, Reply)>,
     on_update: impl Fn(Update),
 ) {
+    // A failure is reported when it changes, not on every retry: while the service is down the
+    // app would otherwise log and redraw every couple of seconds.
+    let last_failure = std::sync::Mutex::new(None::<String>);
+    let report = |update: Update| {
+        let mut last = last_failure.lock().unwrap_or_else(|e| e.into_inner());
+        match &update {
+            Update::Connected => *last = None,
+            Update::Disconnected(reason) if last.as_deref() == Some(reason) => return,
+            Update::Disconnected(reason) => *last = Some(reason.clone()),
+            Update::Event(_) => {}
+        }
+        drop(last);
+        on_update(update);
+    };
     loop {
-        match session(&options, &mut requests, &on_update).await {
+        match session(&options, &mut requests, &report).await {
             Ok(()) => return,
-            Err(reason) => on_update(Update::Disconnected(reason)),
+            Err(reason) => report(Update::Disconnected(reason)),
         }
         // Until the next attempt, nothing can be delivered: say so rather than queue requests
         // the user would see happen much later.
