@@ -15,7 +15,11 @@ use th_core::manifest::is_valid_id;
 /// The root and everything under it except `secrets\`.
 pub const ROOT_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)";
 /// `secrets\`: DPAPI blobs and management passwords, readable by the service alone.
-pub const SECRETS_SDDL: &str = "D:P(A;OICI;FA;;;SY)";
+/// Administrators may list folders and delete what is in them, so an uninstall (which runs as an
+/// administrator, not as SYSTEM) can remove the store, but they may not read a file's contents:
+/// - folders: `0x110081` = list, read attributes, delete, synchronize;
+/// - files (`OIIO`): `0x110080` = read attributes, delete, synchronize. No read-data.
+pub const SECRETS_SDDL: &str = "D:P(A;OICI;FA;;;SY)(A;CI;0x110081;;;BA)(A;OIIO;0x110080;;;BA)";
 
 /// Where everything lives. Paths only; [`prepare`] creates and secures them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,11 +260,11 @@ mod tests {
         &sddl[sddl.find('(').unwrap_or(sddl.len())..]
     }
 
-    /// An unelevated account would lock itself out of the store it creates, so this runs in
-    /// the test VM: `cargo test -p th-service --lib -- --ignored`.
+    /// `secrets\` admits SYSTEM alone, so this runs as SYSTEM in the test VM, as the service
+    /// does: `scripts\vm.ps1 test lib -AsSystem`.
     #[cfg(windows)]
     #[test]
-    #[ignore = "needs an elevated administrator; run it in the th-test VM"]
+    #[ignore = "needs LocalSystem; run it in the th-test VM with vm.ps1 test lib -AsSystem"]
     fn prepare_replaces_a_planted_link_and_secures_the_store() {
         use crate::win;
 
@@ -300,10 +304,18 @@ mod tests {
         let secrets = win::dacl_sddl(&layout.secrets()).unwrap();
         assert!(root.starts_with("D:P") && secrets.starts_with("D:P"));
         assert_eq!(aces(&root), "(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)");
-        assert_eq!(aces(&secrets), "(A;OICI;FA;;;SY)");
+        assert_eq!(
+            aces(&secrets),
+            "(A;OICI;FA;;;SY)(A;CI;0x110081;;;BA)(A;OIIO;0x110080;;;BA)"
+        );
 
-        // `secrets\` shuts out even administrators; as its owner, take access back to clean up.
-        win::set_dacl(&layout.secrets(), "D:P(A;OICI;FA;;;OW)").unwrap();
+        // A file in secrets\ inherits the file entry: administrators may delete it, not read it.
+        let secret = layout.credentials().join("probe.cred");
+        fs::write(&secret, b"sealed").unwrap();
+        assert_eq!(
+            aces(&win::dacl_sddl(&secret).unwrap()),
+            "(A;ID;FA;;;SY)(A;ID;0x110080;;;BA)"
+        );
         fs::remove_dir_all(layout.root()).unwrap();
     }
 }

@@ -8,6 +8,7 @@
     scripts\vm.ps1 copy                        # release th-service.exe to C:\th
     scripts\vm.ps1 configs ..\test-infra\out   # client configs to C:\th\configs
     scripts\vm.ps1 test wg_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.conf' }
+    scripts\vm.ps1 test lib                    # the crate's unit tests, elevated
     scripts\vm.ps1 run 'C:\th\th-service.exe disengage'
     scripts\vm.ps1 restore before-wg
 #>
@@ -24,6 +25,10 @@ param(
     # Environment variables for `test`.
     [hashtable]$Env = @{},
 
+    # Run the test as LocalSystem, as the service runs, rather than as the VM's administrator
+    # (some paths, such as secrets\, are SYSTEM's alone).
+    [switch]$AsSystem,
+
     [string]$VM = 'th-test'
 )
 
@@ -31,7 +36,7 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $credentialFile = Join-Path $env:USERPROFILE '.tunnelhop\th-test.cred'
 
-function Require-Name([string]$what) {
+function Assert-Name([string]$what) {
     if (-not $Name) { throw "$Action needs $what" }
 }
 
@@ -49,18 +54,38 @@ function Open-Session {
     $session
 }
 
-# The path of the test executable cargo builds for `--test <target>`.
-function Build-Test([string]$target) {
+# Run cargo in the repository and return what it prints on stdout. Its progress goes to stderr,
+# which Windows PowerShell 5.1 turns into terminating errors under 'Stop' once redirected, so
+# stderr is shown as text and only the exit code decides.
+function Invoke-Cargo([string[]]$arguments) {
     Push-Location $repo
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     try {
-        $lines = cargo test -p th-service --test $target --no-run --message-format=json
-        if ($LASTEXITCODE -ne 0) { throw "cargo could not build the $target test" }
+        & cargo @arguments 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { Write-Host $_.ToString() } else { $_ }
+        }
+        if ($LASTEXITCODE -ne 0) { throw "cargo $($arguments -join ' ') failed (exit $LASTEXITCODE)" }
     } finally {
+        $ErrorActionPreference = $previous
         Pop-Location
     }
+}
+
+# The path of the test executable cargo builds for `--test <target>`; `lib` means the
+# crate's own unit tests.
+function Get-TestExecutable([string]$target) {
+    if ($target -eq 'lib') {
+        $selector = @('--lib')
+        $artifactName = 'th_service'
+    } else {
+        $selector = @('--test', $target)
+        $artifactName = $target
+    }
+    $lines = Invoke-Cargo (@('test', '-p', 'th-service') + $selector + @('--no-run', '--message-format=json'))
     $artifact = $lines |
         ForEach-Object { try { $_ | ConvertFrom-Json } catch { $null } } |
-        Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.target.name -eq $target } |
+        Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.target.name -eq $artifactName } |
         Select-Object -Last 1
     if (-not $artifact) { throw "no test executable named $target" }
     $artifact.executable
@@ -68,23 +93,17 @@ function Build-Test([string]$target) {
 
 switch ($Action) {
     'checkpoint' {
-        Require-Name 'a checkpoint name'
+        Assert-Name 'a checkpoint name'
         Checkpoint-VM -Name $VM -SnapshotName $Name
         "Checkpoint '$Name' taken."
     }
     'restore' {
-        Require-Name 'a checkpoint name'
+        Assert-Name 'a checkpoint name'
         Restore-VMCheckpoint -VMName $VM -Name $Name -Confirm:$false
         "Restored '$Name'."
     }
     'copy' {
-        Push-Location $repo
-        try {
-            cargo build -p th-service --release
-            if ($LASTEXITCODE -ne 0) { throw 'cargo build failed' }
-        } finally {
-            Pop-Location
-        }
+        Invoke-Cargo @('build', '-p', 'th-service', '--release') | Out-Host
         $session = Open-Session
         try {
             Copy-Item -ToSession $session (Join-Path $repo 'target\release\th-service.exe') -Destination C:\th\ -Force
@@ -94,7 +113,7 @@ switch ($Action) {
         }
     }
     'configs' {
-        Require-Name 'the directory with the generated client configs (test-infra/out)'
+        Assert-Name 'the directory with the generated client configs (test-infra/out)'
         $files = Get-ChildItem -File $Name -Include *.conf, *.ovpn -Recurse
         if (-not $files) { throw "no .conf or .ovpn files in $Name" }
         $session = Open-Session
@@ -108,17 +127,41 @@ switch ($Action) {
         }
     }
     'test' {
-        Require-Name 'a test target (wg_live, ...)'
-        $executable = Build-Test $Name
+        Assert-Name 'a test target (wg_live, lib, ...)'
+        $executable = Get-TestExecutable $Name
         $session = Open-Session
         try {
             $remote = "C:\th\$Name.exe"
             Copy-Item -ToSession $session $executable -Destination $remote -Force
-            $code = Invoke-Command -Session $session -ArgumentList $remote, $Env {
-                param($exe, $variables)
-                foreach ($key in $variables.Keys) { Set-Item "env:$key" $variables[$key] }
-                & $exe --ignored --nocapture --test-threads=1 | Out-Host
-                $LASTEXITCODE
+            $code = Invoke-Command -Session $session -ArgumentList $remote, $Env, $AsSystem.IsPresent {
+                param($exe, $variables, $asSystem)
+                $arguments = '--ignored --nocapture --test-threads=1'
+                if (-not $asSystem) {
+                    foreach ($key in $variables.Keys) { Set-Item "env:$key" $variables[$key] }
+                    # stderr as plain text: the test's own output, not an error. The exit code decides.
+                    & $exe $arguments.Split(' ') 2>&1 | ForEach-Object { "$_" } | Out-Host
+                    return $LASTEXITCODE
+                }
+                # As SYSTEM: a one-off scheduled task runs a script that sets the environment,
+                # runs the test with its output in a log, and records the exit code.
+                $log = "$exe.log"; $exit = "$exe.exit"; $script = "$exe.cmd"
+                Remove-Item $log, $exit -ErrorAction SilentlyContinue
+                $lines = @('@echo off')
+                foreach ($key in $variables.Keys) { $lines += "set `"$key=$($variables[$key])`"" }
+                $lines += "`"$exe`" $arguments > `"$log`" 2>&1"
+                $lines += "echo %ERRORLEVEL% > `"$exit`""
+                Set-Content -Path $script -Value $lines -Encoding ASCII
+                $task = 'TunnelHop-test'
+                Unregister-ScheduledTask -TaskName $task -Confirm:$false -ErrorAction SilentlyContinue
+                $action = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument "/c `"$script`""
+                Register-ScheduledTask -TaskName $task -Action $action -User 'SYSTEM' -RunLevel Highest | Out-Null
+                Start-ScheduledTask -TaskName $task
+                $deadline = (Get-Date).AddMinutes(10)
+                while (-not (Test-Path $exit) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 1 }
+                Unregister-ScheduledTask -TaskName $task -Confirm:$false
+                if (Test-Path $log) { Get-Content $log | Out-Host }
+                if (-not (Test-Path $exit)) { return 'timed out' }
+                [int](Get-Content $exit).Trim()
             }
             if ($code -ne 0) { throw "$Name failed in $VM (exit $code)" }
         } finally {
@@ -126,10 +169,11 @@ switch ($Action) {
         }
     }
     'run' {
-        Require-Name 'a command'
+        Assert-Name 'a command'
         $session = Open-Session
         try {
-            Invoke-Command -Session $session -ScriptBlock ([scriptblock]::Create($Name))
+            # A command's own errors are reported, not turned into a stop of this script.
+            Invoke-Command -Session $session -ScriptBlock ([scriptblock]::Create($Name)) -ErrorAction Continue
         } finally {
             Remove-PSSession $session
         }
