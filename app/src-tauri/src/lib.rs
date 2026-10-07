@@ -236,6 +236,20 @@ mod app {
 
     pub fn run() {
         tauri::Builder::default()
+            // The app has no console: what it logs (an unreachable service, a tray it could not
+            // update, autostart it could not enable) goes to %LOCALAPPDATA%\app.tunnelhop\logs.
+            .plugin(
+                tauri_plugin_log::Builder::new()
+                    .clear_targets()
+                    .target(tauri_plugin_log::Target::new(
+                        tauri_plugin_log::TargetKind::LogDir {
+                            file_name: Some("tunnelhop".into()),
+                        },
+                    ))
+                    .level(log::LevelFilter::Info)
+                    .max_file_size(1024 * 1024)
+                    .build(),
+            )
             // A second launch (the Start menu while the tray icon runs) shows the first one.
             .plugin(tauri_plugin_single_instance::init(|app, _, _| {
                 show_dashboard(app)
