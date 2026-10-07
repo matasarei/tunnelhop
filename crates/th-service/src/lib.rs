@@ -4,6 +4,7 @@
 
 pub mod credentials;
 pub mod drivers;
+pub mod killswitch;
 pub mod logging;
 #[cfg(windows)]
 pub mod pipe;

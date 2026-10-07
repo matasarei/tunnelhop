@@ -71,6 +71,17 @@ services:
     networks:
       lab: { ipv4_address: 172.31.77.10 }
 
+  # Only a LAN target for the kill-switch test: something open on the lab subnet, which an
+  # engaged kill-switch must block. Not a probe URL: on-link, it bypasses tunnels. Its own
+  # container, because Docker Desktop cannot publish one container port on two host addresses.
+  lan-target:
+    build: .
+    command: [whatsmyip]
+    ports: ["${SERVER_ADDRESS:-192.168.77.1}:8081:8080/tcp"]
+    restart: unless-stopped
+    networks:
+      lab: { ipv4_address: 172.31.77.9 }
+
   gen:
     build: .
     entrypoint: [/usr/local/bin/gen.sh]

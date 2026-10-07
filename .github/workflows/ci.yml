@@ -27,3 +27,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
+      - run: cargo clippy -p th-service --all-targets --features dev-safety -- -D warnings
+      # The kill-switch's dev safety timer must never ship. Its marker string is absent from a
+      # release build, and present in a dev-safety build, or this check would prove nothing.
+      - name: Release build carries no dev safety timer
+        shell: bash
+        run: |
+          cargo build -p th-service --release
+          cargo build -p th-service --release --features dev-safety --target-dir target/dev-safety
+          if grep -q -a TUNNELHOP_DEV_SAFETY_TIMER target/release/th-service.exe; then
+            echo "::error::the release build contains the dev safety timer"; exit 1
+          fi
+          if ! grep -q -a TUNNELHOP_DEV_SAFETY_TIMER target/dev-safety/release/th-service.exe; then
+            echo "::error::the dev-safety build lacks the marker, so the check above proves nothing"; exit 1
+          fi
+          echo "release build: no dev safety timer"

@@ -4,6 +4,7 @@
 fn main() -> std::process::ExitCode {
     use std::process::ExitCode;
 
+    use th_service::killswitch::WfpKillSwitch;
     use th_service::svc::{self, describe};
     use th_service::{logging, runtimes};
 
@@ -23,6 +24,13 @@ fn main() -> std::process::ExitCode {
     if command != "run" {
         logging::to_stderr();
     }
+    // A dev build says so on every command. This also keeps the marker in the binary, so CI's
+    // check that release builds lack it cannot pass by accident.
+    #[cfg(feature = "dev-safety")]
+    log::warn!(
+        "{}: dev build, an unconfirmed kill-switch engage lifts itself",
+        th_service::killswitch::dev_safety::MARKER
+    );
     let result = match command.as_str() {
         "run" => svc::run().map_err(|e| {
             let hint = "`run` is for the service control manager; use `install`";
@@ -30,11 +38,10 @@ fn main() -> std::process::ExitCode {
         }),
         "install" => svc::install(),
         "uninstall" => svc::uninstall(),
-        // The kill-switch arrives in step 13; until then there is nothing to remove.
-        "disengage" => {
-            log::info!("this build has no kill-switch; nothing to disengage");
-            Ok(())
-        }
+        // The recovery command: works whatever state the service is in, or without it.
+        "disengage" => WfpKillSwitch::disengage_now()
+            .map(|()| log::info!("kill-switch removed; traffic flows normally"))
+            .map_err(Into::into),
         "runtimes" => {
             for runtime in runtimes::discover() {
                 println!("{:?}: {:?}", runtime.protocol, runtime.availability);

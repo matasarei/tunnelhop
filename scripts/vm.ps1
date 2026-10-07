@@ -8,7 +8,8 @@
     scripts\vm.ps1 copy                        # release th-service.exe to C:\th
     scripts\vm.ps1 configs ..\test-infra\out   # client configs to C:\th\configs
     scripts\vm.ps1 test wg_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.conf' }
-    scripts\vm.ps1 test lib                    # the crate's unit tests, elevated
+    scripts\vm.ps1 test lib -AsSystem          # the crate's VM-only unit tests, as SYSTEM
+    scripts\vm.ps1 test killswitch_live -Features dev-safety -Env @{ TH_DEV_SAFETY_SECONDS = '3' }
     scripts\vm.ps1 run 'C:\th\th-service.exe disengage'
     scripts\vm.ps1 restore before-wg
 #>
@@ -28,6 +29,9 @@ param(
     # Run the test as LocalSystem, as the service runs, rather than as the VM's administrator
     # (some paths, such as secrets\, are SYSTEM's alone).
     [switch]$AsSystem,
+
+    # Cargo features for `test` and `copy`, such as dev-safety.
+    [string]$Features = '',
 
     [string]$VM = 'th-test'
 )
@@ -82,7 +86,8 @@ function Get-TestExecutable([string]$target) {
         $selector = @('--test', $target)
         $artifactName = $target
     }
-    $lines = Invoke-Cargo (@('test', '-p', 'th-service') + $selector + @('--no-run', '--message-format=json'))
+    $featureArguments = if ($Features) { @('--features', $Features) } else { @() }
+    $lines = Invoke-Cargo (@('test', '-p', 'th-service') + $selector + $featureArguments + @('--no-run', '--message-format=json'))
     $artifact = $lines |
         ForEach-Object { try { $_ | ConvertFrom-Json } catch { $null } } |
         Where-Object { $_.reason -eq 'compiler-artifact' -and $_.executable -and $_.target.name -eq $artifactName } |
@@ -103,7 +108,8 @@ switch ($Action) {
         "Restored '$Name'."
     }
     'copy' {
-        Invoke-Cargo @('build', '-p', 'th-service', '--release') | Out-Host
+        $featureArguments = if ($Features) { @('--features', $Features) } else { @() }
+        Invoke-Cargo (@('build', '-p', 'th-service', '--release') + $featureArguments) | Out-Host
         $session = Open-Session
         try {
             Copy-Item -ToSession $session (Join-Path $repo 'target\release\th-service.exe') -Destination C:\th\ -Force
@@ -133,7 +139,9 @@ switch ($Action) {
         try {
             $remote = "C:\th\$Name.exe"
             Copy-Item -ToSession $session $executable -Destination $remote -Force
-            $code = Invoke-Command -Session $session -ArgumentList $remote, $Env, $AsSystem.IsPresent {
+            # Live tests that could cut a machine off refuse to run without this.
+            $variables = @{ TH_TEST_VM = '1' } + $Env
+            $code = Invoke-Command -Session $session -ArgumentList $remote, $variables, $AsSystem.IsPresent {
                 param($exe, $variables, $asSystem)
                 $arguments = '--ignored --nocapture --test-threads=1'
                 if (-not $asSystem) {
