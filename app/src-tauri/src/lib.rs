@@ -11,6 +11,7 @@ pub use app::{run, show_dashboard};
 #[cfg(windows)]
 mod app {
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
     use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -34,6 +35,9 @@ mod app {
         client: ServiceClient,
         report: Mutex<Option<StatusReport>>,
         tray: Mutex<Option<Tray>>,
+        /// Status events received so far: a `GetStatus` reply that arrives after one is older
+        /// than what is shown, and is dropped.
+        status_events: AtomicU64,
     }
 
     /// The dashboard window, shown and brought to the front.
@@ -89,9 +93,12 @@ mod app {
             Update::Connected => {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    let client = app.state::<AppState>().client.clone();
+                    let state = app.state::<AppState>();
+                    let seen = state.status_events.load(Ordering::SeqCst);
+                    let client = state.client.clone();
                     if let Ok(Response::Status { report }) =
                         client.request(Request::GetStatus).await
+                        && state.status_events.load(Ordering::SeqCst) == seen
                     {
                         apply(&app, Some(report));
                     }
@@ -101,7 +108,12 @@ mod app {
                 log::info!("service unreachable: {reason}");
                 apply(app, None);
             }
-            Update::Event(Event::Status { report }) => apply(app, Some(report)),
+            Update::Event(Event::Status { report }) => {
+                app.state::<AppState>()
+                    .status_events
+                    .fetch_add(1, Ordering::SeqCst);
+                apply(app, Some(report));
+            }
             Update::Event(Event::Alert { message }) => {
                 notify(app, &message);
                 let _ = app.emit("alert", &message);
@@ -272,6 +284,7 @@ mod app {
                 app.manage(AppState {
                     client,
                     report: Mutex::new(None),
+                    status_events: AtomicU64::new(0),
                     tray: Mutex::new(None),
                 });
                 let tray = Tray::build(app.handle(), on_action)?;
