@@ -793,13 +793,15 @@ fn ip_of(
     }
 }
 
-/// The interface that holds `ip` as one of its unicast addresses.
-pub fn interface_with_address(ip: std::net::IpAddr) -> io::Result<Option<u64>> {
+/// The interface that holds `ip` as one of its unicast addresses, and whether the address is
+/// usable yet. A new address is "tentative" while Windows checks it is not a duplicate (about
+/// two seconds on an OpenVPN adapter), and until then nothing can be sent from it.
+pub fn interface_with_address(ip: std::net::IpAddr) -> io::Result<Option<(u64, bool)>> {
     use windows_sys::Win32::NetworkManagement::IpHelper::{
         FreeMibTable, GetUnicastIpAddressTable, MIB_UNICASTIPADDRESS_ROW,
         MIB_UNICASTIPADDRESS_TABLE,
     };
-    use windows_sys::Win32::Networking::WinSock::AF_UNSPEC;
+    use windows_sys::Win32::Networking::WinSock::{AF_UNSPEC, IpDadStatePreferred};
 
     let mut table: *mut MIB_UNICASTIPADDRESS_TABLE = ptr::null_mut();
     // SAFETY: a valid out pointer; the table is freed below.
@@ -815,7 +817,12 @@ pub fn interface_with_address(ip: std::net::IpAddr) -> io::Result<Option<u64>> {
         .iter()
         .find(|row| ip_of(&row.Address) == Some(ip))
         // SAFETY: every bit pattern of the union is a valid u64.
-        .map(|row| unsafe { row.InterfaceLuid.Value });
+        .map(|row| {
+            (
+                unsafe { row.InterfaceLuid.Value },
+                row.DadState == IpDadStatePreferred,
+            )
+        });
     // SAFETY: allocated by GetUnicastIpAddressTable.
     unsafe { FreeMibTable(table.cast()) };
     Ok(found)
@@ -976,9 +983,15 @@ mod tests {
 
     #[test]
     fn an_address_leads_to_its_interface() {
-        let loopback = interface_with_address("127.0.0.1".parse().unwrap()).unwrap();
-        assert!(loopback.is_some_and(|luid| luid != 0));
-        assert!(interface_is_up(loopback.unwrap()).unwrap());
+        let (loopback, usable) = interface_with_address("127.0.0.1".parse().unwrap())
+            .unwrap()
+            .expect("loopback holds 127.0.0.1");
+        assert_ne!(loopback, 0);
+        assert!(
+            usable,
+            "loopback's address is long past duplicate detection"
+        );
+        assert!(interface_is_up(loopback).unwrap());
         assert!(!interface_is_up(0).unwrap(), "no interface has LUID 0");
         // TEST-NET-1: never assigned to a real interface.
         assert_eq!(

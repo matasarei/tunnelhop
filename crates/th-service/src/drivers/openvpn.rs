@@ -494,13 +494,15 @@ mod driver {
                 Notification::Other(_) => {}
             }
         };
-        // The address is in place by CONNECTED; the lookup only waits out the table update.
+        // CONNECTED comes while the address is still tentative (Windows checks it is not a
+        // duplicate, about 2 s): nothing gets through until it is usable, so a probe made at
+        // once fails with "host unreachable" (seen in th-test). "Up" means usable.
         loop {
             match win::interface_with_address(local_ip)
                 .map_err(|e| failed("cannot list addresses".into(), e))?
             {
-                Some(luid) => return Ok(luid),
-                None => tokio::time::sleep(POLL).await,
+                Some((luid, true)) => return Ok(luid),
+                _ => tokio::time::sleep(POLL).await,
             }
         }
     }

@@ -100,6 +100,23 @@ fn routes() -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// The lab's "what's my IP" answer, asked once with no retry.
+fn public_ip() -> String {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect_timeout(
+        &"198.18.77.2:8080".parse().unwrap(),
+        std::time::Duration::from_secs(5),
+    )
+    .expect("the probe address is reachable through the tunnel");
+    stream
+        .write_all(b"GET / HTTP/1.0\r\nHost: 198.18.77.2\r\n\r\n")
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    let body = response.split("\r\n\r\n").nth(1).unwrap_or_default();
+    body.trim().to_string()
+}
+
 fn openvpn_processes() -> usize {
     let output = std::process::Command::new("tasklist")
         .args(["/fi", "imagename eq openvpn.exe", "/fo", "csv", "/nh"])
@@ -154,6 +171,13 @@ async fn a_profile_connects_reports_up_and_disconnects_cleanly() {
 
     let handle = driver.connect(&profile).await.expect("connected");
     assert_ne!(handle.interface.0, 0, "the tunnel's interface was found");
+    // Usable the moment connect returns, as the engine's probe needs it: no "host unreachable"
+    // while Windows still checks the new address.
+    assert_eq!(
+        public_ip(),
+        "172.31.77.13",
+        "the lab sees the OpenVPN server's address"
+    );
     assert_eq!(driver.status(&handle).await.unwrap(), TunnelStatus::Up);
     let routes = routes();
     assert!(
