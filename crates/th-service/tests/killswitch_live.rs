@@ -24,6 +24,8 @@ use th_service::killswitch::WfpKillSwitch;
 use th_service::runtimes;
 
 const PROBE: &str = "198.18.77.2:8080";
+/// Something open on the lab subnet (the probe, also published there): a LAN host to block.
+const LAN_TARGET: &str = "192.168.77.1:8081";
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Refuse to run anywhere but the test VM: on the PC this would cut off its network.
@@ -43,6 +45,20 @@ impl Drop for Lift {
         if let Err(e) = WfpKillSwitch::disengage_now() {
             eprintln!("could not disengage: {e}");
         }
+    }
+}
+
+/// Removes a test tunnel when dropped, so a failing assertion never leaves one up for the next
+/// test (its WireGuard kill-switch would block the LAN there).
+struct RemoveTunnel(String);
+
+impl Drop for RemoveTunnel {
+    fn drop(&mut self) {
+        let wireguard = std::path::Path::new(&std::env::var("ProgramFiles").unwrap())
+            .join(r"WireGuard\wireguard.exe");
+        let _ = std::process::Command::new(wireguard)
+            .args(["/uninstalltunnelservice", &self.0])
+            .status();
     }
 }
 
@@ -78,13 +94,14 @@ fn probe() -> Option<String> {
 #[ignore = "blocks the machine's traffic: th-test VM only"]
 fn engage_permits_only_the_endpoints_and_disengage_restores_everything() {
     let _lift = start();
-    // Resolved while DNS still works.
+    // Resolved while DNS still works. Each must be reachable now, or "blocked" below proves
+    // nothing.
     let internet = addr("example.com:443");
     let dns = addr("8.8.8.8:53");
-    assert!(
-        reachable(internet),
-        "the VM reaches the internet before engaging"
-    );
+    let lan = addr(LAN_TARGET);
+    for (target, what) in [(internet, "the internet"), (dns, "DNS"), (lan, "the LAN")] {
+        assert!(reachable(target), "{what} is reachable before engaging");
+    }
     let no_tunnel = probe().expect("the probe answers before engaging");
 
     let endpoint = ResolvedEndpoint {
@@ -100,7 +117,7 @@ fn engage_permits_only_the_endpoints_and_disengage_restores_everything() {
     );
     assert!(!reachable(internet), "the internet is blocked");
     assert!(!reachable(dns), "DNS is blocked");
-    assert!(!reachable(addr("192.168.77.1:8080")), "the LAN is blocked");
+    assert!(!reachable(lan), "the LAN is blocked");
 
     // Engaging again replaces the endpoint set: the probe is no longer permitted.
     WfpKillSwitch::engage_now(&[]).expect("engage with no endpoints");
@@ -148,6 +165,8 @@ async fn a_tunnel_interface_carries_traffic_only_while_allowed() {
         .unwrap();
     let driver = WireguardDriver::new(&runtime, r"C:\th\tunnels").unwrap();
     let killswitch = WfpKillSwitch::new();
+    // Declared after `_lift`, so dropped first: the tunnel goes, then the block.
+    let _remove = RemoveTunnel(profile.tunnel_name.clone());
 
     // The order a rotation uses: engage with the endpoint, connect, then allow the interface.
     killswitch.engage(&endpoints).await.expect("engage");
