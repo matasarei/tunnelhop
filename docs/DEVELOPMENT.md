@@ -9,11 +9,11 @@ development machine offline.
 ```
 Windows 11 Pro PC (x64)                      ← you and Claude Code work here; never firewalled
 ├── repo, Rust, Node, Claude Code
+├── Docker Desktop  test-infra/ containers  ← WireGuard + OpenVPN test servers, "what's my IP" endpoint
 ├── Hyper-V
-│   ├── th-test     Windows 11 x64 VM        ← service, drivers, kill-switch and leak tests run here
-│   │               WireGuard + OpenVPN installed; checkpoint "clean"
-│   └── th-servers  small Linux VM           ← WireGuard + OpenVPN test servers, "what's my IP" endpoint
-└── th-lab          internal switch + NAT, 192.168.77.0/24, so both VMs have fixed addresses
+│   └── th-test     Windows 11 x64 VM        ← service, drivers, kill-switch and leak tests run here
+│                   WireGuard + OpenVPN installed; checkpoint "clean"
+└── th-lab          internal switch + NAT, 192.168.77.0/24; the PC is .1 (servers), plus 198.18.77.2 (probe)
 ```
 
 **Why a VM, when the PC is already Windows?** The kill-switch blocks all traffic with WFP
@@ -31,13 +31,13 @@ restore a checkpoint while the VM's network is fully blocked.
 | Installing the service, the pipe, WireGuard connect/disconnect (steps 10–12) | `th-test`; the PC is tolerable but avoid it |
 | Kill-switch, leak tests, OpenVPN live tests (steps 13–16) | **`th-test` only** |
 | UI and installer (steps 17–19) | `th-test` from the clean checkpoint, then one final pass on the PC |
-| VPN test servers | `th-servers` |
+| VPN test servers | Docker Desktop on the PC, reachable from `th-test` only (§4) |
 
 ## Requirements
 
 - **Windows 11 Pro, Enterprise or Education.** Hyper-V isn't available on Home. If the PC is
   Home, see [If the PC is Windows Home](#if-the-pc-is-windows-home) before starting.
-- **RAM:** 16 GB or more (6 GB for `th-test`, 1–2 GB for `th-servers`).
+- **RAM:** 16 GB or more (6 GB for `th-test`, about 1 GB for the test server containers).
 - **Disk:** about 100 GB free.
 - **CPU virtualization** enabled in the firmware (VT-x/AMD-V). It usually is already.
 
@@ -51,6 +51,7 @@ winget install --id Rustlang.Rustup -e
 winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 winget install --id OpenJS.NodeJS.LTS -e          # needed from step 17
 winget install --id WiresharkFoundation.Wireshark -e   # reads leak-test captures
+winget install --id Docker.DockerDesktop -e       # runs the test servers (WSL2 backend)
 Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All   # then reboot
 ```
 
@@ -75,87 +76,126 @@ Add-LocalGroupMember -SID S-1-5-32-578 -Member "$env:USERDOMAIN\$env:USERNAME"  
 
 ## 2. The lab network
 
-A private switch with NAT, so both VMs keep the same addresses across reboots (Hyper-V's
+A private switch with NAT, so the VM keeps the same address across reboots (Hyper-V's
 "Default Switch" changes its subnet). Administrator PowerShell:
 
 ```powershell
 New-VMSwitch -Name th-lab -SwitchType Internal
 New-NetIPAddress -IPAddress 192.168.77.1 -PrefixLength 24 -InterfaceAlias "vEthernet (th-lab)"
+New-NetIPAddress -IPAddress 198.18.77.2 -PrefixLength 32 -InterfaceAlias "vEthernet (th-lab)"
 New-NetNat -Name th-lab -InternalIPInterfaceAddressPrefix 192.168.77.0/24
+# Let th-test, and only the lab subnet, reach the test servers and the probe.
+New-NetFirewallRule -DisplayName "TunnelHop test servers (lab only)" -Direction Inbound `
+    -Action Allow -Protocol UDP -LocalPort 41820,41821,1194 -RemoteAddress 192.168.77.0/24
+New-NetFirewallRule -DisplayName "TunnelHop probe (lab only)" -Direction Inbound `
+    -Action Allow -Protocol TCP -LocalPort 8080 -RemoteAddress 192.168.77.0/24
 ```
 
 | Address | Host |
 |---|---|
-| 192.168.77.1 | the PC (gateway and NAT to the internet) |
-| 192.168.77.10 | `th-servers` |
+| 192.168.77.1 | the PC: gateway, NAT to the internet, and the VPN test servers |
+| 198.18.77.2 | the PC: the "what's my IP" probe, deliberately off the lab subnet |
 | 192.168.77.20 | `th-test` |
 
-The switch has no DHCP, so each VM gets a static address, gateway 192.168.77.1, and DNS
+The switch has no DHCP, so the VM gets a static address, gateway 192.168.77.1, and DNS
 1.1.1.1.
 
 ## 3. The test VM (`th-test`)
 
-1. Download a Windows 11 x64 ISO. The 90-day evaluation from Microsoft's Evaluation Center
-   is fine for testing.
-2. Create the VM (administrator PowerShell; adjust the paths):
+1. Download a Windows 11 x64 ISO. Any edition works; Home is a good choice, since most users
+   run it (the VM used so far is Home). Keep ISOs out of git: `*.iso` in `.git/info/exclude`.
+2. Create the VM, at first with no network, which lets Setup create a local account. Being in
+   Hyper-V Administrators is enough, no elevation needed; adjust the ISO path:
 
    ```powershell
-   New-VM -Name th-test -Generation 2 -MemoryStartupBytes 6GB -SwitchName th-lab `
-          -NewVHDPath "C:\Hyper-V\th-test.vhdx" -NewVHDSizeBytes 64GB
+   New-VM -Name th-test -Generation 2 -MemoryStartupBytes 4GB -NoVHD -Path C:\Hyper-V
+   New-VHD -Path C:\Hyper-V\th-test\th-test.vhdx -SizeBytes 64GB -Dynamic
+   Add-VMHardDiskDrive -VMName th-test -Path C:\Hyper-V\th-test\th-test.vhdx
+   # Dynamic memory: Windows Setup needs 4 GB to start; 6 GB at most leaves room for the PC.
+   Set-VMMemory -VMName th-test -DynamicMemoryEnabled $true -StartupBytes 4GB -MinimumBytes 2GB -MaximumBytes 6GB
    Set-VMProcessor -VMName th-test -Count 4
    Set-VMKeyProtector -VMName th-test -NewLocalKeyProtector
    Enable-VMTPM -VMName th-test                      # Windows 11 requires a TPM
-   Add-VMDvdDrive -VMName th-test -Path "C:\ISO\Win11.iso"
+   Add-VMDvdDrive -VMName th-test -Path C:\path\to\Win11.iso
    Set-VMFirmware -VMName th-test -FirstBootDevice (Get-VMDvdDrive -VMName th-test)
-   Set-VM -Name th-test -CheckpointType Standard     # checkpoints keep the running state
-   Start-VM th-test; vmconnect localhost th-test
+   Set-VM -Name th-test -CheckpointType Standard -AutomaticCheckpointsEnabled $false
+   vmconnect localhost th-test; Start-VM th-test
    ```
-3. Install Windows with a **local administrator** account (for example `thadmin`). Give it
-   192.168.77.20/24, gateway 192.168.77.1, DNS 1.1.1.1.
-4. Inside the VM, in an administrator PowerShell:
 
-   ```powershell
-   winget install --id WireGuard.WireGuard -e
-   winget install --id OpenVPNTechnologies.OpenVPN -e
-   New-Item -ItemType Directory C:\th | Out-Null
-   # The service runs as LocalSystem from here: standard users must not be able to replace it.
-   icacls C:\th /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F"
-   ```
-5. Back on the PC, store the VM's credential once. It's encrypted for your Windows user and
+   The DVD only boots if a key is pressed at "Press any key to boot from CD or DVD", within
+   about 5 seconds. If the window misses it, send the key through Hyper-V while restarting:
+   `Msvm_Keyboard.TypeKey(0x20)` on the VM in `root\virtualization\v2`.
+3. Install Windows with a **local administrator** account. Home insists on a network during
+   setup: at that screen press **Shift+F10** and run `start ms-cxh:localonly`.
+4. Back on the PC, store the VM's credential once. It's encrypted for your Windows user and
    kept outside the repo:
 
    ```powershell
    New-Item -ItemType Directory "$env:USERPROFILE\.tunnelhop" -Force | Out-Null
-   Get-Credential thadmin | Export-Clixml "$env:USERPROFILE\.tunnelhop\th-test.cred"
+   Get-Credential | Export-Clixml "$env:USERPROFILE\.tunnelhop\th-test.cred"
    ```
-6. Check that PowerShell Direct works, then take the clean checkpoint:
+5. Remove the DVD, connect the VM to `th-lab` and give it its address, all over PowerShell Direct:
 
    ```powershell
+   Get-VMDvdDrive -VMName th-test | Remove-VMDvdDrive
+   Connect-VMNetworkAdapter -VMName th-test -SwitchName th-lab
    $cred = Import-Clixml "$env:USERPROFILE\.tunnelhop\th-test.cred"
-   Invoke-Command -VMName th-test -Credential $cred { hostname; wg.exe --version }
-   Checkpoint-VM -Name th-test -SnapshotName clean
+   Invoke-Command -VMName th-test -Credential $cred {
+       $nic = Get-NetAdapter -Physical | Select-Object -First 1
+       New-NetIPAddress -InterfaceIndex $nic.ifIndex -IPAddress 192.168.77.20 -PrefixLength 24 -DefaultGateway 192.168.77.1
+       # Some networks drop plain DNS to 1.1.1.1; 8.8.8.8 first.
+       Set-DnsClientServerAddress -InterfaceIndex $nic.ifIndex -ServerAddresses 8.8.8.8, 1.1.1.1
+       Rename-Computer -NewName th-test -Force
+   }
+   Restart-VM th-test -Force
    ```
+6. Install WireGuard and OpenVPN in the VM from their signed MSIs. winget can't initialise its
+   sources in a PowerShell Direct session, so download the installers inside the VM, check
+   `Get-AuthenticodeSignature` (WireGuard LLC, OpenVPN Inc.), and run `msiexec /i … /qn`. The
+   first `scripts\vm.ps1` session creates `C:\th` and locks it to SYSTEM and Administrators.
+7. Take the clean checkpoint: `scripts\vm.ps1 checkpoint clean`.
 
-## 4. The test servers (`th-servers`)
+## 4. The test servers (Docker Desktop on the PC)
 
-A small Debian or Ubuntu Server VM: Generation 2, 2 GB RAM, 16 GB disk, switch `th-lab`,
-address 192.168.77.10. Turn off Secure Boot for Linux (`Set-VMFirmware -VMName th-servers
--EnableSecureBoot Off`) and install Docker and SSH in it. Step 12 adds `test-infra/` to the
-repo; it runs there with `docker compose up -d` and provides:
+The servers are containers, not another VM: Docker Desktop's WSL2 kernel has WireGuard and TUN,
+and running them on the PC saves a VM's RAM and an OS install. They publish their ports on the
+PC's lab addresses only (192.168.77.1 and 198.18.77.2), so they are reachable from `th-test` and from
+nothing else. They hold no kill-switch and touch none of the PC's own networking. In
+`test-infra/` (see its [README](../test-infra/README.md)):
 
-- **two WireGuard servers and one OpenVPN server**, each with its own tunnel subnet, so a
-  rotation between them really changes the client's address;
-- **a "what's my IP" HTTP endpoint** on each server's tunnel-side address. It answers with the
-  client's source address and is reachable only through that tunnel;
-- **a script that writes matching client configs** into `test-infra/out/` (gitignored), which
-  are then zipped into a test bundle.
+```sh
+docker compose run --rm gen     # keys, server configs (data/), client configs (out/)
+docker compose up -d --build    # needs th-lab (§2)
+```
 
-**Why the endpoint matters.** Both VMs reach the internet through the PC's NAT, so any public
+They provide:
+
+- **two WireGuard servers and one OpenVPN server**, each with its own tunnel subnet and each
+  NATing out through its own address, so a rotation between them really changes the address
+  the outside sees;
+- **one "what's my IP" endpoint, `http://198.18.77.2:8080/`**, answering with the caller's
+  source address;
+- **a generator** that writes fresh keys and matching client configs into `test-infra/out/`
+  (gitignored), to be copied into `th-test` and zipped into test bundles.
+
+**Why the endpoint matters.** The VM reaches the internet through the PC's NAT, so any public
 "what's my IP" service would see the same address with or without the tunnel. The engine's
 check that the IP changed (and differs from the ISP address) would then always fail. In
-tests the service's probe URLs point at these endpoints instead: before connecting, the probe
-sees `192.168.77.20`; through tunnel A it sees A's client address, and so on. Step 14 makes the
-probe URLs configurable for exactly this.
+tests the service's probe URLs point at this endpoint instead. With no tunnel it sees Docker's
+port proxy (`172.31.77.1`), and through each tunnel it sees that server's own address
+(`172.31.77.11`, `.12`, `.13`). Step 14 makes the probe URLs configurable for exactly this.
+
+**Why the probe has an address of its own, off the lab subnet.** It must reach the probe
+through whichever tunnel is up, and two things would route it around the tunnel instead:
+OpenVPN's `redirect-gateway` exempts the server's own address (so not 192.168.77.1), and any
+address on the lab subnet is on-link, sent straight over the switch, which WireGuard's own
+kill-switch then blocks (so not 192.168.77.x at all). 198.18.77.2 comes from 198.18.0.0/15,
+reserved for network testing and never routed on the internet. The VM reaches it through its
+gateway, which is the PC holding it.
+
+If Docker Desktop is not an option, a small Linux VM on `th-lab` running the same compose file
+works too: give it an address, then set `SERVER_ADDRESS` and `PROBE_ADDRESS` to it (the probe
+then needs a second address on that VM for the same reason).
 
 ## 5. Day-to-day workflow
 
@@ -174,8 +214,17 @@ Copy-Item -ToSession $vm <that path> -Destination C:\th\wg_live.exe -Force
 Invoke-Command -Session $vm { C:\th\wg_live.exe --ignored --nocapture }
 ```
 
-Step 12 wraps this in `scripts/vm.ps1` (build, copy, run, checkpoint, restore) so it's one
-command per test.
+`scripts/vm.ps1` wraps this so it's one command each. It also creates `C:\th` in the VM and
+locks it to SYSTEM and Administrators:
+
+```powershell
+scripts\vm.ps1 checkpoint before-wg                 # before every risky run
+scripts\vm.ps1 copy                                 # release th-service.exe to C:\th
+scripts\vm.ps1 configs <path to test-infra\out>     # client configs to C:\th\configs
+scripts\vm.ps1 test wg_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.conf' }
+scripts\vm.ps1 run 'C:\th\th-service.exe disengage'
+scripts\vm.ps1 restore before-wg
+```
 
 **Checkpoints:**
 
@@ -185,8 +234,8 @@ Restore-VMCheckpoint -VMName th-test -Name before-killswitch -Confirm:$false
 Restore-VMCheckpoint -VMName th-test -Name clean -Confirm:$false  # back to a fresh Windows
 ```
 
-**Shutting down when you're done:** `Stop-VM th-test; Stop-VM th-servers`. When the VMs are
-off, Hyper-V uses no CPU or memory for them.
+**Shutting down when you're done:** `Stop-VM th-test`, and `docker compose stop` in
+`test-infra/`. When the VM is off, Hyper-V uses no CPU or memory for it.
 
 ## 6. The leak test (steps 14 and 16)
 
@@ -204,10 +253,12 @@ traffic:
 
 ```powershell
 & "C:\Program Files\Wireshark\tshark.exe" -r leak.pcapng `
-  -Y "not (ip.addr==192.168.77.10) and not dhcp and not dhcpv6 and not (icmpv6.type >= 133 and icmpv6.type <= 137)"
+  -Y "not (ip.addr==192.168.77.1 and udp.port in {41820 41821 1194}) and not dhcp and not dhcpv6 and not (icmpv6.type >= 133 and icmpv6.type <= 137)"
 ```
 
-The expected output is **empty**. Anything listed is a leak.
+The expected output is **empty**. Anything listed is a leak. The filter allows only the VPN
+ports on 192.168.77.1, not the whole address: that address is also the VM's gateway, so
+anything else sent to it is a leak too.
 
 ## Safety rules
 

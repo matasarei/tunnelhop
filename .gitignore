@@ -23,6 +23,7 @@ node_modules/
 *.conf
 !docs/**/*.conf
 test-infra/data/
+test-infra/out/
 auth.txt
 *.zip
 

@@ -3,6 +3,7 @@
 //! Windows only, apart from the pure logic, which also builds elsewhere so it can be tested.
 
 pub mod credentials;
+pub mod drivers;
 pub mod logging;
 #[cfg(windows)]
 pub mod pipe;

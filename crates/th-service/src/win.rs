@@ -525,6 +525,98 @@ pub fn dpapi_unprotect(sealed: &[u8]) -> io::Result<Zeroizing<Vec<u8>>> {
     Ok(plain)
 }
 
+/// The LUID of the network interface called `alias` (a WireGuard tunnel's interface carries the
+/// tunnel's name).
+pub fn interface_luid(alias: &str) -> io::Result<u64> {
+    use windows_sys::Win32::NetworkManagement::IpHelper::ConvertInterfaceAliasToLuid;
+    use windows_sys::Win32::NetworkManagement::Ndis::NET_LUID_LH;
+
+    let mut luid = NET_LUID_LH { Value: 0 };
+    // SAFETY: NUL-terminated alias and a valid out pointer.
+    win32_result(unsafe { ConvertInterfaceAliasToLuid(wide(alias).as_ptr(), &mut luid) })?;
+    // SAFETY: every bit pattern of the union is a valid u64.
+    Ok(unsafe { luid.Value })
+}
+
+/// The names of every Win32 service whose name starts with `prefix`, compared without regard
+/// to case as the SCM does.
+pub fn services_with_prefix(prefix: &str) -> io::Result<Vec<String>> {
+    use windows_sys::Win32::Foundation::ERROR_MORE_DATA;
+    use windows_sys::Win32::System::Services::{
+        CloseServiceHandle, ENUM_SERVICE_STATUS_PROCESSW, EnumServicesStatusExW, OpenSCManagerW,
+        SC_ENUM_PROCESS_INFO, SC_MANAGER_CONNECT, SC_MANAGER_ENUMERATE_SERVICE, SERVICE_STATE_ALL,
+        SERVICE_WIN32,
+    };
+
+    // SAFETY: local machine, default database.
+    let manager = unsafe {
+        OpenSCManagerW(
+            ptr::null(),
+            ptr::null(),
+            SC_MANAGER_CONNECT | SC_MANAGER_ENUMERATE_SERVICE,
+        )
+    };
+    if manager.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let prefix = prefix.to_lowercase();
+    let mut names = Vec::new();
+    let mut resume = 0u32;
+    // u64 storage keeps the buffer aligned for the structures written into it.
+    let mut buffer = vec![0u64; 8 * 1024];
+    let result = loop {
+        let (mut needed, mut count) = (0u32, 0u32);
+        // SAFETY: the buffer is as large as the size passed; the entries it receives, and the
+        // strings they point to, live inside it until the next call.
+        let ok = unsafe {
+            EnumServicesStatusExW(
+                manager,
+                SC_ENUM_PROCESS_INFO,
+                SERVICE_WIN32,
+                SERVICE_STATE_ALL,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * 8) as u32,
+                &mut needed,
+                &mut count,
+                &mut resume,
+                ptr::null(),
+            )
+        };
+        let more = ok == 0 && unsafe { GetLastError() } == ERROR_MORE_DATA;
+        if ok == 0 && !more {
+            break Err(io::Error::last_os_error());
+        }
+        // SAFETY: the call wrote `count` entries at the start of the buffer.
+        let entries = unsafe {
+            std::slice::from_raw_parts(
+                buffer.as_ptr() as *const ENUM_SERVICE_STATUS_PROCESSW,
+                count as usize,
+            )
+        };
+        for entry in entries {
+            // SAFETY: each name is a NUL-terminated string inside the buffer.
+            let name = unsafe { from_wide_ptr(entry.lpServiceName) }
+                .to_string_lossy()
+                .into_owned();
+            if name.to_lowercase().starts_with(&prefix) {
+                names.push(name);
+            }
+        }
+        if !more {
+            break Ok(names);
+        }
+        if count == 0 {
+            // Not even one entry fitted: grow to what the SCM asked for, and at least double,
+            // so a `needed` that is no larger than the buffer cannot repeat the same call forever.
+            let wanted = (needed as usize).div_ceil(8) + 1;
+            buffer.resize(wanted.max(buffer.len() * 2), 0);
+        }
+    };
+    // SAFETY: the handle came from OpenSCManagerW above.
+    unsafe { CloseServiceHandle(manager) };
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,5 +669,25 @@ mod tests {
     #[test]
     fn invalid_sddl_is_an_error() {
         assert!(SecurityDescriptor::from_sddl("not sddl").is_err());
+    }
+
+    #[test]
+    fn services_are_found_by_prefix_without_regard_to_case() {
+        // The event log service exists on every Windows installation.
+        let found = services_with_prefix("EVENTLOG").unwrap();
+        assert!(
+            found.iter().any(|n| n.eq_ignore_ascii_case("EventLog")),
+            "{found:?}"
+        );
+        assert!(
+            services_with_prefix("WireGuardTunnel$th-zz-none")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_unknown_interface_has_no_luid() {
+        assert!(interface_luid("th-not-an-interface").is_err());
     }
 }

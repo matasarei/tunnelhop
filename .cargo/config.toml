@@ -1,0 +1,8 @@
+# Link the C runtime into every Windows binary. th-service runs as a LocalSystem service on
+# machines that may not have the Visual C++ Redistributable (a fresh Windows does not); a
+# dynamically linked build fails there with STATUS_DLL_NOT_FOUND before main() runs.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

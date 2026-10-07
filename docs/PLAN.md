@@ -39,7 +39,7 @@ crates/th-service/            # Windows only (cfg(windows)); stub main elsewhere
   src/probe.rs                # HTTPS IP probe (reqwest + rustls)
   src/orchestrator.rs         # rotation engine + drivers + kill-switch + timers + pipe events
 app/                          # Tauri v2 + Svelte 5 + Vite, runs unelevated
-test-infra/                   # WireGuard + OpenVPN test servers (docker compose, run in the servers VM)
+test-infra/                   # WireGuard + OpenVPN test servers (docker compose, in Docker Desktop on the PC)
 docs/TESTING.md               # the full manual acceptance procedure (step 19)
 ```
 
@@ -140,7 +140,7 @@ step (or per closely related pair), opened as a PR against `main`.
 9. [x] IPC protocol (`crates/th-core/src/ipc.rs`).
 
 ### M2: service skeleton + WireGuard
-10. [ ] The Windows service shell: `run`/`install`/`uninstall`/`disengage`, the control
+10. [x] The Windows service shell: `run`/`install`/`uninstall`/`disengage`, the control
     handler, the ACL'd store and DPAPI, runtime discovery and version checks, and logging.
     - Also: store OpenVPN credentials per bundle and profile from `SetCredentials`, and
       report `has_credentials` per profile.
@@ -156,9 +156,13 @@ step (or per closely related pair), opened as a PR against `main`.
       `has_credentials`), `runtimes.rs`, `logging.rs`, and `win.rs` (every `unsafe` Win32
       call). `Secret` and `Credentials` in `th-core` are zeroized on drop. 130 tests pass on
       the PC; `th-service runtimes`, `run` from a console, and an unelevated `install` behave.
-      Still to do in `th-test`: `install`, `sc query TunnelHop` RUNNING, `icacls` on the store
-      and on `secrets\`, `uninstall`, and the elevated
-      `cargo test -p th-service --lib -- --ignored` (`prepare` replacing a planted junction).
+    - **Proven in `th-test` (2026-10-07, Windows 11 Home 26300):** `install` gives a RUNNING,
+      automatic LocalSystem service with the restart actions and the non-crash flag set;
+      `icacls` shows SYSTEM and Administrators on the store and the restricted entries on
+      `secrets\`; the pipe opens; STOP and start work; `vm.ps1 test lib -AsSystem` passes
+      (`prepare` replaces a planted junction); an administrator cannot read a credential file
+      SYSTEM wrote; `uninstall` removes the service, the data and the pipe. The first run found
+      the C runtime DLL missing and `uninstall` unable to delete `secrets\` (both fixed).
 11. [x] The named pipe server with SDDL, dispatching `th_core::ipc` requests.
     - Create: `crates/th-service/src/pipe.rs`, `crates/th-service/tests/pipe.rs`
       (`#[cfg(windows)]`)
@@ -169,7 +173,7 @@ step (or per closely related pair), opened as a PR against `main`.
       version, request before hello, second hello, malformed line, events to every client,
       name squatting, shutdown), plus a unit test that pins the pipe's DACL. The service opens
       the pipe at start; until step 14 its handler answers `GetStatus` and refuses the rest.
-12. [ ] WireguardDriver: connect, disconnect, status and reconcile. Also the test servers and
+12. [x] WireguardDriver: connect, disconnect, status and reconcile. Also the test servers and
     the VM helper.
     - Create: `crates/th-service/src/drivers/{mod.rs,wireguard.rs}`,
       `test-infra/docker-compose.yml`, `test-infra/README.md`, `scripts/vm.ps1`
@@ -181,8 +185,18 @@ step (or per closely related pair), opened as a PR against `main`.
     - `scripts/vm.ps1`: build, copy into `th-test` over PowerShell Direct, run a test,
       checkpoint, restore.
     - Test: unit tests for the config-copy `Endpoint` rewrite. In the test VM:
-      `cargo test -p th-service --test wg_live -- --ignored` against the servers VM
+      `cargo test -p th-service --test wg_live -- --ignored` against the test servers
       (connect, service RUNNING, disconnect, service gone).
+    - **Landed (2026-10-07), live check pending:** `drivers/wireguard.rs`, `tests/wg_live.rs`,
+      `test-infra/` (Dockerfile, compose, `gen.sh`, `server.sh`, `whatsmyip.py`) and
+      `scripts/vm.ps1`. The unit tests pass on the PC. The test servers run in Docker Desktop
+      on the PC and were checked with clients in containers: all three tunnels connect, and
+      the probe tells them apart.
+    - **Proven in `th-test` (2026-10-07):** `wg_live` passes against `wg-a` (connect, RUNNING,
+      interface, reconcile reads the endpoints back, reconnect over a leftover, disconnect
+      twice). From the VM the probe at `http://198.18.77.2:8080/` answers `172.31.77.1` with no
+      tunnel, `.11` through `wg-a`, `.12` through `wg-b` and `.13` through `ovpn`, and traffic
+      reaches the internet through the WireGuard tunnels.
 
 ### M3: kill-switch + live rotation (test VM only)
 13. [ ] The WFP kill-switch: engage, allow/revoke interface, disengage and reconcile, all
@@ -227,8 +241,12 @@ step (or per closely related pair), opened as a PR against `main`.
     DPAPI, the teardown timeout, and reconnect grace.
     - Create: `crates/th-service/src/drivers/openvpn.rs`
     - Modify: `crates/th-service/src/orchestrator.rs` (register the driver by protocol)
-    - Test: `ovpn_live` (`--ignored`) in the VM against the servers VM, then the leak test
+    - Test: `ovpn_live` (`--ignored`) in the VM against the test servers, then the leak test
       again with mixed-protocol rotation.
+    - Note from step 12: a *killed* `openvpn.exe` leaves its routes (`0.0.0.0/1` and
+      `128.0.0.0/1` through the dead tunnel, and a host route to the server). Stop it through
+      the management interface; on reconcile after a crash, remove routes whose next hop is a
+      tunnel that no longer exists.
 
 ### M5: UI + installer
 17. [ ] The Tauri app shell: pipe client, tray menu, close-to-tray, and autostart.
@@ -357,6 +375,33 @@ Implementation rulings worth knowing (full text in the commit bodies):
   and the UI would otherwise send that impostor its credentials.
 - **A failed pipe stops the service** with service-specific code 2, and `install` enables the
   restart actions for non-crash failures, so the SCM restarts it rather than reporting RUNNING.
+- **Our tunnels (step 12):** `tunnel_name::is_ours` accepts exactly the generated shape, `th-`
+  and 12 lowercase hex characters. The prefix alone would have claimed a user's `th-home`.
+- **WireGuard endpoints (step 12):** the copy in `tunnels\` has each peer's `Endpoint`
+  rewritten to the resolved address, peers in file order. A count mismatch is an error.
+  `reconcile` reads the endpoints back from that copy and leaves `profile_id` empty; the
+  orchestrator maps the tunnel name back to a profile.
+- **Test servers in Docker Desktop, not a VM (step 12):** they run as containers on the PC,
+  published only on addresses the PC holds on `th-lab`: the VPN servers on 192.168.77.1, the
+  probe on 198.18.77.2. That saves a VM's RAM and an OS install; the kill-switch and every live
+  test still run only in `th-test`. WireGuard is published on 41820/41821, because Windows
+  reserves blocks of the dynamic port range (here 51786–51885) for Hyper-V and WinNAT.
+- **One probe endpoint in the lab (step 12):** instead of one "what's my IP" per tunnel,
+  `http://198.18.77.2:8080/` answers with the caller's address. Each server NATs its tunnel
+  out through its own address and sends probe requests from its tunnel straight to the
+  endpoint, so that one URL tells "no tunnel" (`172.31.77.1`, Docker's proxy) from each tunnel
+  (`.11`, `.12`, `.13`), as a public service would. It is off the lab subnet so it is always
+  routed through the tunnel: OpenVPN's `redirect-gateway` exempts the server's address, and
+  an on-link address bypasses the tunnel and is blocked by WireGuard's own kill-switch.
+- **Leak filter:** allows only the VPN ports on 192.168.77.1, which is also the VM's gateway.
+- **Static C runtime (`.cargo/config.toml`):** Windows binaries link the CRT statically, so
+  `th-service.exe` runs where the Visual C++ Redistributable is absent (a fresh Windows).
+- **`secrets\` and uninstall:** Administrators may list and delete there but not read
+  (`0x110081` on folders, `0x110080` on files), so an uninstall running as an administrator
+  removes the store. The blobs stay DPAPI-sealed for SYSTEM regardless.
+- **Tests that need SYSTEM** run through `scripts\vm.ps1 test <target> -AsSystem`.
+- **The test VM is Windows 11 Home**, which most users run. PowerShell Direct and everything
+  the tests need work on it.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -370,8 +415,9 @@ Still open:
 - **2026-10-07:** the Windows PC is set up (Rust 1.99, Build Tools, Hyper-V access without
   elevation). Step 10's code and step 26 landed on `feature/service-shell`; 130 tests pass
   on Windows. The `th-test` VM doesn't exist yet, so step 10's VM check is pending.
-- **2026-10-07:** step 10 merged (PR #6, VM check still pending). Step 11 landed on
-  `feature/pipe-server`.
-- **Next:** build `th-test` (DEVELOPMENT.md §2–3) and run step 10's VM check. Installing the
-  service now also opens the pipe, and `sc qfailure TunnelHop` plus `sc qfailureflag TunnelHop`
-  should show the restart actions with the non-crash flag set. Then step 12.
+- **2026-10-07:** step 10 merged (PR #6, VM check still pending). Step 11 merged (PR #7).
+- **2026-10-07:** the lab is up: `th-test` (Windows 11 Home, WireGuard 1.1.1, OpenVPN 2.7.7,
+  checkpoint `clean`) and the test servers in Docker Desktop. Step 10's VM check and step 12's
+  live test pass on `feature/wireguard-driver`; 163 tests pass on the PC.
+- **Next:** step 13, the WFP kill-switch, in `th-test` only and from a checkpoint. Step 15 (the
+  OpenVPN management client) needs no VM and can go in parallel.
