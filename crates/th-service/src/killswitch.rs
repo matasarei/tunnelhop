@@ -17,6 +17,8 @@ use th_core::sanitize::Transport;
 /// Every filter's name starts with this; interface permits carry their LUID after it.
 pub const NAME: &str = "TunnelHop";
 const INTERFACE_NAME: &str = "TunnelHop interface";
+/// The block filters' name; finding one is how `is_engaged` knows the block is in place.
+const BLOCK_NAME: &str = "TunnelHop: block everything else";
 
 const PERMIT_WEIGHT: u8 = 15;
 const BLOCK_WEIGHT: u8 = 0;
@@ -132,7 +134,7 @@ pub fn base_rules(endpoints: &[ResolvedEndpoint]) -> Vec<Rule> {
     }
     for layer in Layer::ALL {
         rules.push(Rule {
-            name: format!("{NAME}: block everything else"),
+            name: BLOCK_NAME.to_string(),
             layer,
             action: Action::Block,
             weight: BLOCK_WEIGHT,
@@ -184,8 +186,8 @@ mod wfp {
     use windows_sys::core::GUID;
 
     use super::{
-        Action, Condition, Layer, NAME, Rule, base_rules, interface_name, interface_rules,
-        is_interface_filter,
+        Action, BLOCK_NAME, Condition, Layer, NAME, Rule, base_rules, interface_name,
+        interface_rules, is_interface_filter,
     };
 
     /// Fixed, so a restarted service, `th-service disengage` and the uninstaller all find the
@@ -567,11 +569,10 @@ mod wfp {
 
         /// Whether the block is in place: what a starting service checks to report `Blocked`.
         pub fn is_engaged() -> io::Result<bool> {
-            let block = format!("{NAME}: block everything else");
             Ok(Engine::open()?
                 .our_filters()?
                 .iter()
-                .any(|(_, name)| *name == block))
+                .any(|(_, name)| name == BLOCK_NAME))
         }
 
         /// How many filters of ours exist, for tests and diagnostics.
@@ -704,6 +705,8 @@ mod tests {
             assert_eq!(blocks.len(), 1, "{layer:?}");
             assert!(blocks[0].conditions.is_empty());
             assert_eq!(blocks[0].weight, BLOCK_WEIGHT);
+            // is_engaged looks for exactly this name.
+            assert_eq!(blocks[0].name, BLOCK_NAME);
         }
     }
 
