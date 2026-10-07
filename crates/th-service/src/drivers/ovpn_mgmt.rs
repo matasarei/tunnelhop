@@ -177,7 +177,8 @@ pub struct Management<S> {
 }
 
 impl Management<TcpStream> {
-    /// Connect to the management port and log in.
+    /// Connect to the management port and log in. Nothing here times out: a peer that accepts
+    /// and then stays silent is waited on forever, so the caller bounds this with a timeout.
     pub async fn connect(addr: SocketAddr, password: &Secret) -> Result<Self, ManagementError> {
         let stream = TcpStream::connect(addr).await?;
         Self::login(stream, password).await
@@ -185,7 +186,8 @@ impl Management<TcpStream> {
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin> Management<S> {
-    /// Answer the password prompt. Anything but `SUCCESS:` afterwards is a refusal.
+    /// Answer the password prompt. Anything but `SUCCESS:` afterwards is a refusal. Like
+    /// `connect`, unbounded in time: the caller adds the timeout.
     pub async fn login(stream: S, password: &Secret) -> Result<Self, ManagementError> {
         let mut management = Management {
             stream,
