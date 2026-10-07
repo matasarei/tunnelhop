@@ -347,7 +347,16 @@ Implementation rulings worth knowing (full text in the commit bodies):
   before `Hello`, a wrong version, a second `Hello`, an oversized or unparsable line all close
   or refuse as tested. `Ping` is answered by the pipe itself. The first instance uses
   `FILE_FLAG_FIRST_PIPE_INSTANCE`, so the service refuses to start if the name is taken.
-  At most 16 clients; remote clients are rejected.
+  Remote clients are rejected.
+- **Pipe limits (step 11 review):** at most 4 KB before `Hello`; 16 clients in all and 4 per
+  Windows logon session; a client whose message takes over 30 s to write (it stopped reading)
+  is dropped. There is no idle timeout: the UI waits for events for hours. All are fields of
+  `pipe::Limits`, so tests can shorten them.
+- **Clients verify the server (step 11 review):** `pipe::connect` refuses a pipe whose owner is
+  not SYSTEM or Administrators. While the service is stopped any user could create the name,
+  and the UI would otherwise send that impostor its credentials.
+- **A failed pipe stops the service** with service-specific code 2, and `install` enables the
+  restart actions for non-crash failures, so the SCM restarts it rather than reporting RUNNING.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
@@ -363,5 +372,6 @@ Still open:
   on Windows. The `th-test` VM doesn't exist yet, so step 10's VM check is pending.
 - **2026-10-07:** step 10 merged (PR #6, VM check still pending). Step 11 landed on
   `feature/pipe-server`.
-- **Next:** build `th-test` (DEVELOPMENT.md §2–3) and run step 10's VM check (installing the
-  service now also opens the pipe), then step 12.
+- **Next:** build `th-test` (DEVELOPMENT.md §2–3) and run step 10's VM check. Installing the
+  service now also opens the pipe, and `sc qfailure TunnelHop` plus `sc qfailureflag TunnelHop`
+  should show the restart actions with the non-crash flag set. Then step 12.
