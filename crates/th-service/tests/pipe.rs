@@ -67,7 +67,7 @@ struct Client {
 
 impl Client {
     async fn connect(name: &str) -> Client {
-        let pipe = pipe::connect(name).await.unwrap();
+        let pipe = pipe::connect_unverified(name).await.unwrap();
         let (reader, writer) = tokio::io::split(pipe);
         Client {
             reader: BufReader::new(reader),
@@ -240,4 +240,20 @@ async fn shutdown_stops_the_server() {
     server.stop.send(()).unwrap();
     let result = timeout(Duration::from_secs(5), server.task).await;
     assert!(matches!(result, Ok(Ok(Ok(())))), "{result:?}");
+}
+
+#[tokio::test]
+async fn connect_refuses_a_pipe_a_standard_user_could_have_created() {
+    let name = unique_name();
+    let listener = Listener::bind(&name).unwrap();
+    // Run unelevated, the test process owns the pipe itself: exactly an impostor's position.
+    // Run elevated (CI), the owner is Administrators and the pipe is legitimately trusted.
+    let trusted = th_service::win::owned_by_system_or_admins(listener.pending()).unwrap();
+    let result = pipe::connect(&name).await;
+    if trusted {
+        assert!(result.is_ok(), "{:?}", result.err());
+    } else {
+        let error = result.expect_err("an untrusted server was accepted");
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    }
 }

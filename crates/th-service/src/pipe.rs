@@ -35,9 +35,24 @@ pub const MAX_CLIENTS: usize = 16;
 
 const READ_CHUNK: usize = 64 * 1024;
 
-/// Open a client end of the pipe `name`, retrying briefly while every instance is busy. Must
-/// run inside a Tokio runtime.
+/// Open a client end of the service's pipe, refusing a server that SYSTEM or Administrators do
+/// not own. While the service is stopped any user can create a pipe under its name; without this
+/// check the UI would hand that impostor whatever it sends, credentials included. Must run
+/// inside a Tokio runtime.
 pub async fn connect(name: &str) -> io::Result<NamedPipeClient> {
+    let client = connect_unverified(name).await?;
+    if !crate::win::owned_by_system_or_admins(&client)? {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{name} is not served by the TunnelHop service; refusing to use it"),
+        ));
+    }
+    Ok(client)
+}
+
+/// [`connect`] without checking who serves the pipe: only for tests, whose server is the test
+/// process itself.
+pub async fn connect_unverified(name: &str) -> io::Result<NamedPipeClient> {
     const ATTEMPTS: u32 = 20;
     for attempt in 1..=ATTEMPTS {
         match crate::win::open_pipe_client(name) {

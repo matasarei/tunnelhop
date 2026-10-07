@@ -235,6 +235,35 @@ pub fn open_pipe_client(name: &str) -> io::Result<std::os::windows::io::OwnedHan
     Ok(unsafe { OwnedHandle::from_raw_handle(handle) })
 }
 
+/// Whether a kernel object (the server side of a pipe, seen from its client) is owned by
+/// SYSTEM or the Administrators group. A standard user cannot make either the owner of an
+/// object they create.
+pub fn owned_by_system_or_admins(object: &impl std::os::windows::io::AsHandle) -> io::Result<bool> {
+    use std::os::windows::io::AsRawHandle;
+
+    let mut owner: PSID = ptr::null_mut();
+    let mut sd: PSECURITY_DESCRIPTOR = ptr::null_mut();
+    // SAFETY: the borrow keeps the handle open; `owner` points into `sd`, freed by LocalBox.
+    win32_result(unsafe {
+        GetSecurityInfo(
+            object.as_handle().as_raw_handle(),
+            SE_KERNEL_OBJECT,
+            OWNER_SECURITY_INFORMATION,
+            &mut owner,
+            ptr::null_mut(),
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &mut sd,
+        )
+    })?;
+    let _sd = LocalBox(sd);
+    // SAFETY: `owner` is a valid SID while `_sd` lives.
+    Ok(unsafe {
+        IsWellKnownSid(owner, WinLocalSystemSid) != 0
+            || IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
+    })
+}
+
 /// The DACL of a kernel object (a pipe, say) by its handle, in SDDL.
 pub fn handle_dacl_sddl(object: &impl std::os::windows::io::AsHandle) -> io::Result<String> {
     use std::os::windows::io::AsRawHandle;
