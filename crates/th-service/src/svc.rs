@@ -294,6 +294,13 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
     })
 }
 
+/// Whether opening the service failed because there is none, as opposed to, say, access denied.
+fn not_registered(error: &windows_service::Error) -> bool {
+    const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
+    matches!(error, windows_service::Error::Winapi(e)
+        if e.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST))
+}
+
 /// Stop the service and wait until it has: its stop handler disconnects and lifts the block.
 fn stop_and_wait(service: &Service) -> Result<(), Box<dyn Error>> {
     if service.query_status()?.current_state == ServiceState::Stopped {
@@ -358,7 +365,8 @@ pub fn install() -> Result<(), Box<dyn Error>> {
             log::info!("{SERVICE_NAME} was already registered; updating it");
             existing
         }
-        Err(_) => manager.create_service(&info, access)?,
+        Err(e) if not_registered(&e) => manager.create_service(&info, access)?,
+        Err(e) => return Err(e.into()),
     };
     service.set_description(DESCRIPTION)?;
     let restart = ServiceAction {
@@ -423,7 +431,8 @@ fn remove_service() -> Result<(), Box<dyn Error>> {
             service.delete()?;
             log::info!("removed {SERVICE_NAME}");
         }
-        Err(e) => log::info!("{SERVICE_NAME} is not registered ({e})"),
+        Err(e) if not_registered(&e) => log::info!("{SERVICE_NAME} is not registered"),
+        Err(e) => return Err(e.into()),
     }
     Ok(())
 }
