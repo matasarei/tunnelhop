@@ -21,7 +21,7 @@ mod app {
     use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
     use tauri_plugin_dialog::DialogExt;
     use tauri_plugin_notification::NotificationExt;
-    use th_core::ipc::{Event, Request, Response, Secret, StatusReport};
+    use th_core::ipc::{Event, ProfileFile, Request, Response, Secret, StatusReport};
 
     use crate::bundles::BundleList;
     use crate::import::{ImportOutcome, outcome, read_bundle};
@@ -325,18 +325,40 @@ mod app {
         bundle_id: String,
         files: Vec<ChosenFile>,
     ) -> Result<ImportOutcome, String> {
-        let files = tauri::async_runtime::spawn_blocking(move || {
+        let files = read_servers(files).await?;
+        let client = app.state::<AppState>().client.clone();
+        outcome(
+            client
+                .request(Request::AddProfiles { bundle_id, files })
+                .await?,
+        )
+    }
+
+    /// The chosen files as the service takes them, read off the UI thread.
+    async fn read_servers(files: Vec<ChosenFile>) -> Result<Vec<ProfileFile>, String> {
+        tauri::async_runtime::spawn_blocking(move || {
             files
                 .iter()
                 .map(crate::servers::read)
                 .collect::<Result<Vec<_>, _>>()
         })
         .await
-        .map_err(|e| format!("could not read the files: {e}"))??;
+        .map_err(|e| format!("could not read the files: {e}"))?
+    }
+
+    /// Make a new bundle of the chosen config files (SPEC §3.5), read here as the signed-in
+    /// user. The service makes it the bundle in use when there is none.
+    #[tauri::command]
+    async fn create_bundle(
+        app: AppHandle,
+        name: String,
+        files: Vec<ChosenFile>,
+    ) -> Result<ImportOutcome, String> {
+        let files = read_servers(files).await?;
         let client = app.state::<AppState>().client.clone();
         outcome(
             client
-                .request(Request::AddProfiles { bundle_id, files })
+                .request(Request::CreateBundle { name, files })
                 .await?,
         )
     }
@@ -439,6 +461,7 @@ mod app {
                 delete_bundle,
                 choose_servers,
                 add_servers,
+                create_bundle,
                 remove_servers,
                 set_credentials
             ])

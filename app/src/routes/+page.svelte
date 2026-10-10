@@ -25,8 +25,11 @@
   let importErrors = $state<string[] | null>(null);
   /** What the errors above stopped: an import, or an edit of the servers. */
   let refusedWhat = $state("The bundle was not imported.");
-  /** Config files chosen to become servers, waiting for their names to be confirmed. */
-  let adding = $state<{ bundle: Bundle; files: ipc.ChosenFile[] } | null>(null);
+  /**
+   * Config files chosen to become servers, waiting for their names to be confirmed: of the
+   * bundle in use, or (null) of a new bundle when none is.
+   */
+  let adding = $state<{ bundle: Bundle | null; files: ipc.ChosenFile[] } | null>(null);
   /** An imported bundle not made active yet, because that would drop the current tunnel. */
   let pendingSwitch = $state<Bundle | null>(null);
   /** The credentials dialog: for a whole bundle (profile null) or one server. */
@@ -79,10 +82,11 @@
         else if (e.payload.type === "drop") {
           dragging = false;
           const paths = e.payload.paths;
-          // Config files are servers for the bundle in use; anything else is tried as a bundle.
+          // Config files are servers, for the bundle in use or a new one; anything else is
+          // tried as a bundle.
           if (paths.length > 0 && paths.every((path) => /\.(conf|ovpn)$/i.test(path))) chooseServers(paths);
           else if (paths.length === 1) importFrom(paths[0]);
-          else error = "Drop one bundle .zip, or .conf and .ovpn files to add as servers.";
+          else error = "Drop .conf and .ovpn files to add as servers, or one .zip of them.";
         }
       }),
     ];
@@ -127,11 +131,16 @@
       importErrors = outcome.errors;
       return;
     }
+    await installed(outcome, "Imported");
+  }
+
+  /** What follows a bundle that was just installed: say so, put it in use, ask for sign-in. */
+  async function installed(outcome: Extract<ipc.ImportOutcome, { type: "imported" }>, verb: string) {
     const { bundle } = outcome;
     const count = bundle.profiles.length;
     notice = outcome.already_present
       ? `"${bundle.bundle_name}" is already installed.`
-      : `Imported "${bundle.bundle_name}" (${count} ${count === 1 ? "server" : "servers"}).`;
+      : `${verb} "${bundle.bundle_name}" (${count} ${count === 1 ? "server" : "servers"}).`;
     if (report?.bundle?.bundle_id !== bundle.bundle_id) {
       // Switching disconnects the current bundle first: with a tunnel up, that is the user's call.
       if (report?.state === "disconnected") await run(() => ipc.selectBundle(bundle.bundle_id));
@@ -141,15 +150,16 @@
     if (outcome.needs_credentials.length > 0) asking = { bundle, profile: null };
   }
 
-  /** Offer the dropped config files, or ones from the native picker, as servers to add. */
+  /**
+   * Offer the dropped config files, or ones from the native picker, as servers: added to the
+   * bundle in use, or made into a new bundle when none is.
+   */
   async function chooseServers(paths?: string[]) {
-    const bundle = report?.bundle;
-    if (!bundle) {
-      error = report
-        ? "Servers are added to the bundle in use: import a bundle or switch to one first."
-        : "The TunnelHop service is not running, so the servers were not added.";
+    if (!report) {
+      error = "The TunnelHop service is not running, so the servers were not added.";
       return;
     }
+    const bundle = report.bundle;
     if (busy) {
       error = "The servers were not added: another request was still running. Drop them again.";
       return;
@@ -172,6 +182,21 @@
     notice = done(outcome.bundle);
     refreshBundles();
     if (outcome.needs_credentials.length > 0) asking = { bundle: outcome.bundle, profile: null };
+  }
+
+  /** Make a new bundle of the chosen files; the service puts it in use when none is. */
+  async function createBundle(name: string, files: ipc.ChosenFile[]) {
+    adding = null;
+    importErrors = null;
+    notice = null;
+    const outcome = await run(() => ipc.createBundle(name, files));
+    if (!outcome || outcome.type === "cancelled") return;
+    if (outcome.type === "refused") {
+      refusedWhat = "The bundle was not created.";
+      importErrors = outcome.errors;
+      return;
+    }
+    await installed(outcome, "Created");
   }
 
   function addServers(bundle: Bundle, files: ipc.ChosenFile[]) {
@@ -271,7 +296,7 @@
             ? "Not protected. Connect to pick a server."
             : bundles?.bundles.length
               ? "No bundle is in use. Switch to one below."
-              : "Import a bundle to get started.",
+              : "Add your VPN config files to get started.",
   );
   // A bundle may set an interval the menu does not offer; show it rather than a blank choice.
   const intervalChoices = $derived(
@@ -378,7 +403,12 @@
 
   <div class="heading">
     <h2>Bundles</h2>
-    <fluent-button size="small" disabled={!reachable || busy} onclick={() => importFrom()}>Import bundle…</fluent-button>
+    <div class="buttons">
+      {#if reachable && !report?.bundle}
+        <fluent-button size="small" disabled={busy} onclick={() => chooseServers()}>Add servers…</fluent-button>
+      {/if}
+      <fluent-button size="small" disabled={!reachable || busy} onclick={() => importFrom()}>Import bundle…</fluent-button>
+    </div>
   </div>
   {#if bundles && bundles.bundles.length > 0}
     <Bundles list={bundles} {busy} onswitch={askSwitch} ondelete={askDelete} />
@@ -386,7 +416,8 @@
     <section class="card empty">The installed bundles could not be listed.</section>
   {:else if reachable}
     <section class="card empty">
-      No bundle yet. Import a bundle <code>.zip</code> from your VPN provider, or drop it on this window.
+      No servers yet. Add the <code>.conf</code> (WireGuard) or <code>.ovpn</code> (OpenVPN) files from your VPN
+      provider, or drop them on this window. A <code>.zip</code> of them, or a prepared TunnelHop bundle, works too.
     </section>
   {:else}
     <section class="card empty">The installed bundles appear here once the service is running.</section>
@@ -450,7 +481,8 @@
     bundle={chosen.bundle}
     files={chosen.files}
     reconnects={connected}
-    onadd={(files) => addServers(chosen.bundle, files)}
+    onadd={(files, bundleName) =>
+      chosen.bundle ? addServers(chosen.bundle, files) : createBundle(bundleName, files)}
     oncancel={() => (adding = null)}
   />
 {/if}
@@ -467,7 +499,7 @@
 {/if}
 
 {#if dragging}
-  <div class="drop" aria-hidden="true"><div>Drop a bundle <code>.zip</code> to import it, or config files to add as servers</div></div>
+  <div class="drop" aria-hidden="true"><div>Drop config files to add as servers, or a <code>.zip</code> to import it</div></div>
 {/if}
 
 <style>
@@ -579,6 +611,10 @@
   }
   .heading h2 {
     margin: 0;
+  }
+  .buttons {
+    display: flex;
+    gap: 8px;
   }
   .empty {
     padding: 16px;
