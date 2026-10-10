@@ -9,6 +9,8 @@ use serde::Serialize;
 use th_core::bundle::MAX_ZIP_BYTES;
 use th_core::ipc::{self, BundleInfo, Response};
 
+use crate::lang::text;
+
 /// What an import ended in, as the page shows it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -27,29 +29,28 @@ pub enum ImportOutcome {
 
 /// The file as an `ImportBundle` payload, or why it cannot be one.
 pub fn read_bundle(path: &Path) -> Result<String, String> {
-    let name = path.display();
+    let name = path.display().to_string();
+    let named = [("name", name.as_str())];
     let is_zip = path
         .extension()
         .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
     if !is_zip {
-        return Err(format!(
-            "{name} is not a bundle: TunnelHop bundles are .zip files"
-        ));
+        return Err(text("file.not_bundle", &named));
     }
-    let metadata = std::fs::metadata(path).map_err(|e| format!("cannot open {name}: {e}"))?;
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| text("file.cannot_open", &[named[0], ("reason", &e.to_string())]))?;
     if !metadata.is_file() {
-        return Err(format!("{name} is not a file"));
+        return Err(text("file.not_file", &named));
     }
     // Checked on the length alone, so an oversized file is never read into memory.
     if metadata.len() > MAX_ZIP_BYTES as u64 {
-        return Err(format!(
-            "{name} is larger than 20 MB, the most a bundle may be"
-        ));
+        return Err(text("file.bundle_too_large", &named));
     }
     if metadata.len() == 0 {
-        return Err(format!("{name} is empty"));
+        return Err(text("file.empty", &named));
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {name}: {e}"))?;
+    let bytes = std::fs::read(path)
+        .map_err(|e| text("file.cannot_read", &[named[0], ("reason", &e.to_string())]))?;
     Ok(ipc::encode_zip(&bytes))
 }
 

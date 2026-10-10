@@ -4,6 +4,7 @@
 
 pub mod bundles;
 pub mod import;
+pub mod lang;
 pub mod pipe_client;
 pub mod servers;
 pub mod tray;
@@ -25,7 +26,7 @@ mod app {
 
     use crate::bundles::BundleList;
     use crate::import::{ImportOutcome, outcome, read_bundle};
-
+    use crate::lang::text;
     use crate::pipe_client::{Options, ServiceClient, Update};
     use crate::servers::ChosenFile;
     use crate::tray::{Action, Tray};
@@ -249,8 +250,8 @@ mod app {
                     dialog = dialog.set_parent(&window);
                 }
                 let picked = dialog
-                    .set_title("Import a TunnelHop bundle")
-                    .add_filter("TunnelHop bundle", &["zip"])
+                    .set_title(text("picker.bundle.title", &[]))
+                    .add_filter(text("picker.bundle.filter", &[]), &["zip"])
                     .blocking_pick_file();
                 match picked.and_then(|file| file.into_path().ok()) {
                     Some(path) => path,
@@ -260,7 +261,7 @@ mod app {
         };
         let zip_base64 = tauri::async_runtime::spawn_blocking(move || read_bundle(&path))
             .await
-            .map_err(|e| format!("could not read the bundle: {e}"))??;
+            .map_err(|e| text("file.read_failed", &[("reason", &e.to_string())]))??;
         let client = app.state::<AppState>().client.clone();
         outcome(client.request(Request::ImportBundle { zip_base64 }).await?)
     }
@@ -302,8 +303,8 @@ mod app {
                     dialog = dialog.set_parent(&window);
                 }
                 dialog
-                    .set_title("Add servers")
-                    .add_filter("WireGuard and OpenVPN configs", &["conf", "ovpn"])
+                    .set_title(text("picker.servers.title", &[]))
+                    .add_filter(text("picker.servers.filter", &[]), &["conf", "ovpn"])
                     .blocking_pick_files()
                     .unwrap_or_default()
                     .into_iter()
@@ -343,7 +344,7 @@ mod app {
                 .collect::<Result<Vec<_>, _>>()
         })
         .await
-        .map_err(|e| format!("could not read the files: {e}"))?
+        .map_err(|e| text("file.read_failed", &[("reason", &e.to_string())]))?
     }
 
     /// Make a new bundle of the chosen config files (SPEC §3.5), read here as the signed-in
@@ -396,6 +397,13 @@ mod app {
             password,
         };
         send(&app, request).await
+    }
+
+    /// The language the app speaks, by the name of its file under `locales`: the window shows
+    /// its own text in the same one.
+    #[tauri::command]
+    fn language() -> &'static str {
+        crate::lang::current()
     }
 
     /// The intervals the tray offers, with their labels, so the window offers the same.
@@ -455,6 +463,7 @@ mod app {
                 status,
                 act,
                 intervals,
+                language,
                 import_bundle,
                 select_bundle,
                 list_bundles,

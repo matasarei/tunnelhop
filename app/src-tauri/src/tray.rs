@@ -5,6 +5,8 @@
 use th_core::ipc::StatusReport;
 use th_core::rotation::State;
 
+use crate::lang::text;
+
 /// The rotation intervals the menu offers, in minutes.
 pub const INTERVALS: [u32; 5] = [15, 30, 60, 120, 240];
 
@@ -47,30 +49,46 @@ impl Action {
     }
 }
 
+/// Whole hours as hours, anything else as minutes. Abbreviated, so no language needs a
+/// plural form here.
 pub fn interval_label(minutes: u32) -> String {
-    match minutes {
-        60 => "1 hour".into(),
-        m if m % 60 == 0 => format!("{} hours", m / 60),
-        m => format!("{m} min"),
+    if minutes.is_multiple_of(60) {
+        text("interval.hours", &[("n", &(minutes / 60).to_string())])
+    } else {
+        text("interval.minutes", &[("n", &minutes.to_string())])
     }
+}
+
+/// What the icon says when pointed at.
+pub fn tooltip(status: &str) -> String {
+    text("tray.tooltip", &[("status", status)])
+}
+
+/// A menu item's text. Windows reads `&` in a menu as "underline the next letter", so a real
+/// one is doubled; the language files hold the text as it reads.
+pub fn menu_text(key: &str) -> String {
+    text(key, &[]).replace('&', "&&")
 }
 
 /// The status line: `Connected: <profile> (<IP>)`, `Blocked` or `Disconnected` (SPEC §5), or
 /// that the service cannot be reached.
 pub fn status_text(report: Option<&StatusReport>) -> String {
     let Some(report) = report else {
-        return "Service not running".into();
+        return text("tray.status.unreachable", &[]);
     };
     match report.state {
         State::Connected => {
             let profile = report.profile_id.as_deref().unwrap_or("?");
             match report.public_ip {
-                Some(ip) => format!("Connected: {profile} ({ip})"),
-                None => format!("Connected: {profile}"),
+                Some(ip) => text(
+                    "tray.status.connected_ip",
+                    &[("profile", profile), ("ip", &ip.to_string())],
+                ),
+                None => text("tray.status.connected", &[("profile", profile)]),
             }
         }
-        State::Blocked => "Blocked".into(),
-        State::Disconnected => "Disconnected".into(),
+        State::Blocked => text("tray.status.blocked", &[]),
+        State::Disconnected => text("tray.status.disconnected", &[]),
     }
 }
 
@@ -85,7 +103,7 @@ mod menu {
     use th_core::ipc::StatusReport;
     use th_core::rotation::State;
 
-    use super::{Action, INTERVALS, ids, interval_label, status_text};
+    use super::{Action, INTERVALS, ids, interval_label, menu_text, status_text, tooltip};
 
     /// The items whose text or checks follow the service's state.
     pub struct Tray {
@@ -105,11 +123,17 @@ mod menu {
         ) -> tauri::Result<Tray> {
             let status =
                 MenuItem::with_id(app, ids::STATUS, status_text(None), false, None::<&str>)?;
-            let rotate = MenuItem::with_id(app, ids::ROTATE, "Rotate Now", false, None::<&str>)?;
+            let rotate = MenuItem::with_id(
+                app,
+                ids::ROTATE,
+                menu_text("tray.rotate"),
+                false,
+                None::<&str>,
+            )?;
             let auto = CheckMenuItem::with_id(
                 app,
                 ids::AUTO,
-                "Auto-Rotation",
+                menu_text("tray.auto"),
                 false,
                 false,
                 None::<&str>,
@@ -126,17 +150,24 @@ mod menu {
                 .iter()
                 .map(|(_, item)| item as &dyn tauri::menu::IsMenuItem<Wry>)
                 .collect();
-            let interval = Submenu::with_items(app, "Interval", true, &interval_items)?;
+            let interval =
+                Submenu::with_items(app, menu_text("tray.interval"), true, &interval_items)?;
             let disconnect = MenuItem::with_id(
                 app,
                 ids::DISCONNECT,
-                "Disconnect && unblock",
+                menu_text("tray.disconnect"),
                 false,
                 None::<&str>,
             )?;
-            let dashboard =
-                MenuItem::with_id(app, ids::DASHBOARD, "Open Dashboard", true, None::<&str>)?;
-            let exit = MenuItem::with_id(app, ids::EXIT, "Exit", true, None::<&str>)?;
+            let dashboard = MenuItem::with_id(
+                app,
+                ids::DASHBOARD,
+                menu_text("tray.dashboard"),
+                true,
+                None::<&str>,
+            )?;
+            let exit =
+                MenuItem::with_id(app, ids::EXIT, menu_text("tray.exit"), true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -155,7 +186,7 @@ mod menu {
             let mut builder = TrayIconBuilder::with_id("main")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .tooltip(format!("TunnelHop: {}", status_text(None)))
+                .tooltip(tooltip(&status_text(None)))
                 .on_menu_event(move |app, event| {
                     if let Some(action) = Action::from_id(event.id().as_ref()) {
                         on_action(app, action);
@@ -189,7 +220,7 @@ mod menu {
         pub fn show(&self, report: Option<&StatusReport>) -> tauri::Result<()> {
             let text = status_text(report);
             self.status.set_text(&text)?;
-            self.icon.set_tooltip(Some(format!("TunnelHop: {text}")))?;
+            self.icon.set_tooltip(Some(tooltip(&text)))?;
             let reachable = report.is_some();
             let has_bundle = report.is_some_and(|r| r.bundle.is_some());
             self.rotate.set_enabled(has_bundle)?;
@@ -276,6 +307,6 @@ mod tests {
     #[test]
     fn intervals_read_as_the_spec_writes_them() {
         let labels: Vec<String> = INTERVALS.iter().map(|&m| interval_label(m)).collect();
-        assert_eq!(labels, ["15 min", "30 min", "1 hour", "2 hours", "4 hours"]);
+        assert_eq!(labels, ["15 min", "30 min", "1 h", "2 h", "4 h"]);
     }
 }
