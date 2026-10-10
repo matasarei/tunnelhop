@@ -55,10 +55,15 @@
     onclose();
   }
 
+  // Esc and a click outside close the dialog without either button: that is "Not now" too.
+  function ontoggle(event: Event) {
+    if ((event as CustomEvent<{ newState: string }>).detail?.newState === "closed") cancel();
+  }
+
   const value = (e: Event) => (e.currentTarget as HTMLInputElement).value;
 </script>
 
-<fluent-dialog bind:this={dialog} type="modal" aria-label="Sign in">
+<fluent-dialog bind:this={dialog} type="modal" aria-label="Sign in" {ontoggle}>
   <fluent-dialog-body>
     <div slot="title">{profile ? `Sign in to ${profile.name}` : `Sign in to ${bundle.bundle_name}`}</div>
     <form id="credentials" onsubmit={save}>
