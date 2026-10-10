@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
-use common::{OVPN_CONF, WG_CONF, valid_bundle};
+use common::{Entry, OVPN_CONF, WG_CONF, valid_bundle, zip};
 use th_core::bundle::{self, BundleId};
 use th_core::edit::{self, Edit, MAX_CONFIG_BYTES, NewProfile, profile_id_from, protocol_of};
 use th_core::manifest::{MAX_PROFILES, Protocol};
@@ -309,4 +309,177 @@ fn editing_a_bundle_that_is_not_installed_is_an_error() {
     let missing = BundleId::parse("0123456789abcdef").unwrap();
     let edit = Edit::Remove(vec!["wg-1".into()]);
     assert!(edit::rebuild(tmp.path(), &missing, &edit).is_err());
+}
+
+/// A fresh, empty store.
+fn store() -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("bundles");
+    (tmp, root)
+}
+
+#[test]
+fn loose_config_files_become_a_bundle_that_imports() {
+    let (_tmp, root) = store();
+    let files = [
+        new("Kyiv", "wg-UA-83.conf", WG_CONF),
+        new("", "nl free.OVPN", OVPN_CONF),
+    ];
+
+    let zip = edit::create("  Proton UA ", &files).unwrap();
+    let imported = bundle::import(&zip, &root).unwrap();
+
+    assert_eq!(imported.manifest.bundle_name, "Proton UA");
+    let profiles: Vec<_> = imported
+        .manifest
+        .profiles
+        .iter()
+        .map(|p| (p.id.as_str(), p.name.as_str(), p.protocol, p.file.as_str()))
+        .collect();
+    assert_eq!(
+        profiles,
+        [
+            (
+                "wg-ua-83",
+                "Kyiv",
+                Protocol::Wireguard,
+                "wireguard/wg-ua-83.conf"
+            ),
+            (
+                "nl-free",
+                "nl free",
+                Protocol::Openvpn,
+                "openvpn/nl-free.ovpn"
+            ),
+        ]
+    );
+    assert_eq!(
+        zip,
+        edit::create("Proton UA", &files).unwrap(),
+        "the same files and name give the same bundle"
+    );
+}
+
+#[test]
+fn a_bundle_from_one_file_or_with_no_name_still_imports() {
+    let (_tmp, root) = store();
+    let zip = edit::create(" ", &[new("", "only.conf", WG_CONF)]).unwrap();
+    let imported = bundle::import(&zip, &root).unwrap();
+    assert_eq!(imported.manifest.bundle_name, edit::DEFAULT_BUNDLE_NAME);
+    assert_eq!(imported.manifest.profiles.len(), 1);
+}
+
+#[test]
+fn files_with_the_same_name_each_become_a_server() {
+    let (_tmp, root) = store();
+    let files = [new("", "ua.conf", WG_CONF), new("", "UA.conf", WG_CONF)];
+    let imported = bundle::import(&edit::create("Twins", &files).unwrap(), &root).unwrap();
+    let ids: Vec<_> = imported.manifest.profiles.iter().map(|p| &p.id).collect();
+    assert_eq!(ids, ["ua", "ua-2"]);
+}
+
+#[test]
+fn what_cannot_become_a_bundle_is_refused_before_a_zip_is_built() {
+    let errors = errors_of(edit::create(
+        "Mixed",
+        &[
+            new("", "notes.txt", "hello"),
+            new("", "huge.ovpn", &"x".repeat(MAX_CONFIG_BYTES + 1)),
+        ],
+    ));
+    assert!(errors[0].starts_with("notes.txt"), "{errors:?}");
+    assert!(errors[1].contains("1 MB"), "{errors:?}");
+
+    let nothing = errors_of(edit::create("Empty", &[]));
+    assert!(nothing[0].contains("no config file"), "{nothing:?}");
+
+    let too_many: Vec<_> = (0..=MAX_PROFILES)
+        .map(|n| new("", &format!("s{n}.conf"), WG_CONF))
+        .collect();
+    let errors = errors_of(edit::create("Crowd", &too_many));
+    assert!(errors[0].contains("at most 500"), "{errors:?}");
+}
+
+#[test]
+fn a_hostile_loose_file_is_refused_by_the_import_and_leaves_nothing() {
+    let (_tmp, root) = store();
+    let hostile = OVPN_CONF.replace("client\n", "client\nup \"calc.exe\"\n");
+    let zip = edit::create("Bad", &[new("", "evil.ovpn", &hostile)]).unwrap();
+    let errors: Vec<String> = bundle::import(&zip, &root)
+        .unwrap_err()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        errors.iter().any(|e| e.starts_with("openvpn/evil.ovpn:2")),
+        "{errors:?}"
+    );
+    assert!(bundle::installed(&root).unwrap().is_empty());
+
+    // A name longer than a manifest allows is the import's to refuse as well.
+    let zip = edit::create(&"n".repeat(101), &[new("", "a.conf", WG_CONF)]).unwrap();
+    assert!(bundle::import(&zip, &root).is_err());
+    assert!(bundle::installed(&root).unwrap().is_empty());
+}
+
+#[test]
+fn a_zip_of_bare_configs_becomes_a_bundle() {
+    let (_tmp, root) = store();
+    // As Explorer zips a selection, as a tool that writes backslashes does, and in a folder.
+    let plain = zip(&[
+        Entry::File("wg-UA-83.conf", WG_CONF.as_bytes().to_vec()),
+        Entry::Dir("more/"),
+        Entry::File("more/nl.ovpn", OVPN_CONF.as_bytes().to_vec()),
+        Entry::File(r"other\wg-UA-21.conf", WG_CONF.as_bytes().to_vec()),
+    ]);
+
+    let built = edit::from_config_zip(&plain)
+        .expect("a zip of configs")
+        .unwrap();
+    let imported = bundle::import(&built, &root).unwrap();
+
+    assert_eq!(imported.manifest.bundle_name, edit::DEFAULT_BUNDLE_NAME);
+    let mut ids: Vec<_> = imported
+        .manifest
+        .profiles
+        .iter()
+        .map(|p| p.id.as_str())
+        .collect();
+    ids.sort();
+    assert_eq!(ids, ["nl", "wg-ua-21", "wg-ua-83"]);
+    assert_eq!(
+        built,
+        edit::from_config_zip(&plain).unwrap().unwrap(),
+        "the same zip again is the same bundle"
+    );
+}
+
+#[test]
+fn only_a_zip_of_bare_configs_is_converted() {
+    // A real bundle, something that is not a zip, and a zip with no config at all are the
+    // import's to judge.
+    assert!(edit::from_config_zip(&valid_bundle(vec![])).is_none());
+    assert!(edit::from_config_zip(b"not a zip").is_none());
+    let notes = zip(&[Entry::File("notes.txt", b"hello".to_vec())]);
+    assert!(edit::from_config_zip(&notes).is_none());
+
+    // Configs with anything else beside them are refused, naming the other file.
+    let mixed = zip(&[
+        Entry::File("a.conf", WG_CONF.as_bytes().to_vec()),
+        Entry::File("readme.txt", b"hello".to_vec()),
+    ]);
+    let errors = errors_of(edit::from_config_zip(&mixed).unwrap());
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(
+        errors[0].starts_with("readme.txt") && errors[0].contains("only .conf and .ovpn"),
+        "{errors:?}"
+    );
+
+    // The archive rules of an import hold here too.
+    let link = zip(&[
+        Entry::File("a.conf", WG_CONF.as_bytes().to_vec()),
+        Entry::Symlink("b.conf", "a.conf"),
+    ]);
+    let errors = errors_of(edit::from_config_zip(&link).unwrap());
+    assert!(errors[0].contains("symbolic links"), "{errors:?}");
 }

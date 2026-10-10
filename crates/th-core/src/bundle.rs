@@ -138,7 +138,7 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
         return open(root, &id);
     }
 
-    let entries = read_entries(zip_bytes)?;
+    let entries = read_entries(zip_bytes, check_entry_name)?;
     let manifest_bytes = entries
         .get(MANIFEST_FILE)
         .ok_or_else(|| vec![ImportError::archive("manifest.json is missing")])?;
@@ -229,7 +229,11 @@ pub(crate) fn read_installed_manifest(dir: &Path) -> Result<Manifest, Vec<Import
 }
 
 /// Read every regular file of the archive into memory, enforcing the entry rules and limits.
-fn read_entries(zip_bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, Vec<ImportError>> {
+/// `check_name` says which entry names the archive may hold.
+pub(crate) fn read_entries(
+    zip_bytes: &[u8],
+    check_name: fn(&str) -> Result<(), &'static str>,
+) -> Result<BTreeMap<String, Vec<u8>>, Vec<ImportError>> {
     let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| {
         vec![ImportError::archive(format!(
             "not a valid zip archive: {e}"
@@ -263,7 +267,7 @@ fn read_entries(zip_bytes: &[u8]) -> Result<BTreeMap<String, Vec<u8>>, Vec<Impor
                 continue;
             }
         };
-        if let Err(message) = check_entry_name(&name) {
+        if let Err(message) = check_name(&name) {
             errors.push(ImportError::in_file(&name, message));
             continue;
         }
