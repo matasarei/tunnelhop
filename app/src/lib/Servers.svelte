@@ -9,12 +9,15 @@
     onconnect,
     oncredentials,
     onremove,
+    onwhy,
   }: {
     report: Report;
     busy: boolean;
     onconnect: (profile: Profile) => void;
     oncredentials: (profile: Profile) => void;
     onremove: (profile: Profile) => void;
+    /** Explain why this server's protocol cannot be used. */
+    onwhy: (profile: Profile) => void;
   } = $props();
 
   const profiles = $derived(report.bundle?.profiles ?? []);
@@ -35,7 +38,10 @@
         {#if current}
           <fluent-badge appearance="tint" color="success">Connected</fluent-badge>
         {:else if problem}
-          <fluent-badge appearance="tint" color="severe">Unavailable</fluent-badge>
+          <button class="why" aria-label={`Why ${profile.name} is unavailable`} onclick={() => onwhy(profile)}>
+            <fluent-badge appearance="tint" color="severe">Unavailable</fluent-badge>
+            <span class="more" aria-hidden="true">Why?</span>
+          </button>
         {:else if !profile.has_credentials}
           <fluent-badge appearance="tint" color="warning">Needs sign-in</fluent-badge>
           <fluent-button size="small" disabled={busy} onclick={() => oncredentials(profile)}>
@@ -97,5 +103,27 @@
     align-items: center;
     gap: 8px;
     flex: none;
+  }
+  /* The badge is the button: it opens the explanation. */
+  .why {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 2px;
+    border: 0;
+    border-radius: var(--borderRadiusMedium, 4px);
+    background: none;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
+  }
+  .why:focus-visible {
+    outline: 2px solid var(--colorStrokeFocus2, #000);
+    outline-offset: 1px;
+  }
+  .more {
+    font-size: 12px;
+    color: var(--colorBrandForegroundLink, #115ea3);
+    text-decoration: underline;
   }
 </style>

@@ -338,7 +338,11 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
 - **Dashboard:** bundle, profile, protocol, public IP, state, kill-switch state; bundle import
   by drag-and-drop or file picker, with the list of import errors. After an import that left
   OpenVPN profiles without credentials, a prompt asks for them; the profile list marks any
-  profile still waiting, with an action to set them.
+  profile still waiting, with an action to set them. A profile whose runtime is missing or
+  too old is marked *Unavailable*; the mark opens an explanation of which program is needed
+  (for OpenVPN: the Community edition, not OpenVPN Connect) and where to download it. The app
+  opens no links: the address is shown to copy. The explanation closes once the runtime is
+  found.
   - **Controls:** Connect (a random profile, or the one picked in the profile list), Rotate
     Now, and Disconnect & unblock.
   - **Bundles:** every installed bundle, the active one marked; switch to another, or delete one

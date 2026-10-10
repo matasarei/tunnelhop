@@ -10,10 +10,11 @@
   import Bundles from "$lib/Bundles.svelte";
   import Confirm from "$lib/Confirm.svelte";
   import Credentials from "$lib/Credentials.svelte";
+  import RuntimeHelp from "$lib/RuntimeHelp.svelte";
   import Servers from "$lib/Servers.svelte";
   import { followSystemTheme } from "$lib/fluent";
   import * as ipc from "$lib/ipc";
-  import type { Action, Bundle, BundleList, Profile, Report } from "$lib/ipc";
+  import type { Action, Bundle, BundleList, Profile, Protocol, Report } from "$lib/ipc";
 
   let report = $state<Report | null>(null);
   let intervals = $state<[number, string][]>([]);
@@ -34,6 +35,8 @@
   let pendingSwitch = $state<Bundle | null>(null);
   /** The credentials dialog: for a whole bundle (profile null) or one server. */
   let asking = $state<{ bundle: Bundle; profile: Profile | null } | null>(null);
+  /** The protocol whose missing or outdated program is being explained. */
+  let explaining = $state<Protocol | null>(null);
   let dragging = $state(false);
   /** The installed bundles; null while the service cannot be asked. */
   let bundles = $state<BundleList | null>(null);
@@ -275,6 +278,15 @@
     if (pendingSwitch?.bundle_id === bundle.bundle_id) pendingSwitch = null;
   }
 
+  /** What stops the explained protocol; null once its program is there, which closes the dialog. */
+  const unusable = $derived.by(() => {
+    const found = report?.runtimes.find((r) => r.protocol === explaining)?.availability;
+    return explaining && found && found.status !== "available" ? { protocol: explaining, availability: found } : null;
+  });
+  $effect(() => {
+    if (explaining && !unusable) explaining = null;
+  });
+
   const reachable = $derived(report !== null);
   const connected = $derived(report?.state === "connected");
   const blocked = $derived(report?.state === "blocked");
@@ -306,6 +318,11 @@
   );
 </script>
 
+<!-- Drawn, not typed: a character sits wherever its font puts it, an icon in the middle. -->
+{#snippet cross()}
+  <svg class="cross" viewBox="0 0 12 12" aria-hidden="true"><path d="M1.5 1.5l9 9m0-9l-9 9" /></svg>
+{/snippet}
+
 <main>
   {#if !reachable}
     <fluent-message-bar intent="warning" layout="multiline">
@@ -315,13 +332,13 @@
   {#if alert}
     <fluent-message-bar intent="error" layout="multiline">
       {alert}
-      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (alert = null)}>✕</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (alert = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if error}
     <fluent-message-bar intent="error" layout="multiline">
       {error}
-      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (error = null)}>✕</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (error = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if importErrors}
@@ -333,13 +350,13 @@
           {#each importErrors as line}<li>{line}</li>{/each}
         </ul>
       </div>
-      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (importErrors = null)}>✕</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (importErrors = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if notice}
     <fluent-message-bar intent="success" layout="multiline">
       {notice}
-      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (notice = null)}>✕</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (notice = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if pendingSwitch}
@@ -351,7 +368,7 @@
         "{bundle.bundle_name}" is installed, but not the bundle in use.
       {/if}
       <fluent-button slot="actions" size="small" disabled={busy} onclick={() => switchTo(bundle)}>Switch now</fluent-button>
-      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (pendingSwitch = null)}>✕</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (pendingSwitch = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
 
@@ -398,6 +415,7 @@
       onconnect={(profile) => act({ type: "connect", profile_id: profile.id })}
       oncredentials={(profile) => report?.bundle && (asking = { bundle: report.bundle, profile })}
       onremove={askRemove}
+      onwhy={(profile) => (explaining = profile.protocol)}
     />
   {/if}
 
@@ -473,6 +491,10 @@
 
 {#if asking}
   <Credentials bundle={asking.bundle} profile={asking.profile} onclose={() => (asking = null)} />
+{/if}
+
+{#if unusable}
+  <RuntimeHelp protocol={unusable.protocol} availability={unusable.availability} onclose={() => (explaining = null)} />
 {/if}
 
 {#if adding}
@@ -601,6 +623,26 @@
   footer fluent-button {
     flex: none;
     white-space: nowrap;
+  }
+  /* A small button is 24px high and a line of the message 20px: centre the cross on the line.
+     Fluent's multi-line bar pins the button's content to its top edge; put it back in the middle. */
+  fluent-button[slot="dismiss"] {
+    align-items: center;
+    height: 24px;
+    margin-block: -2px;
+    margin-inline-end: -4px;
+  }
+  .cross {
+    width: 12px;
+    height: 12px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.2;
+    stroke-linecap: round;
+  }
+  /* Fluent keeps room for action buttons under the text even when a bar has none. */
+  fluent-message-bar:not(:has([slot="actions"])) {
+    padding-block-end: 0;
   }
   .heading {
     display: flex;

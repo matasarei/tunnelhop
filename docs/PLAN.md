@@ -537,6 +537,24 @@ step (or per closely related pair), opened as a PR against `main`.
     - Checked in `th-test` (2026-10-10): the service started with WireGuard's folder moved
       aside (`missing`, connect refused); 8 s after the folder was back the status said
       `available`, and connect and rotate worked.
+31. [x] "Unavailable" explains itself, and the dismiss cross is centred. On the PC, OpenVPN
+    Connect was installed and the row only said "OpenVPN is not installed".
+    - Landed: `app/src/lib/RuntimeHelp.svelte` (new); the badge in `Servers.svelte` is a
+      button with a "Why?" link; `runtimeName` in `ipc.ts` ("OpenVPN Community"); the dismiss
+      buttons and bar padding in `+page.svelte`; SPEC §5.
+    - Ruling: the dialog shows the download address with a "Copy link" button and opens no
+      browser. Opening links needs a Tauri plugin the app does not have, and a new dependency
+      is the user's call.
+    - Ruling: the dialog closes by itself once the runtime is found (step 30).
+    - Ruling: the cross is drawn as an icon. The cause of the misalignment was Fluent's
+      multi-line message bar pinning the dismiss button's content to its top edge, and
+      keeping an empty row for action buttons under the text.
+    - Checked in `th-test` (2026-10-10) by keyboard, with OpenVPN's folder moved aside: the
+      row, the dialog, "Copy link" → "Copied", the dialog closing and the server becoming
+      connectable about 10 s after the folder was back; a notice bar with the cross centred
+      on its line.
+    - Not checked: the "too old" wording of the dialog, the WireGuard variant, dark theme,
+      and a mouse click on the badge (the VM is driven by keyboard).
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`

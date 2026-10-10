@@ -284,7 +284,9 @@ cd app; npm run installer; cd ..  # -> target\release\bundle\nsis\TunnelHop_<ver
   -RunLevel Limited` and the exe as its action, and start it with `Start-ScheduledTask`. That
   runs the app in the user's session with the normal, non-admin token, as a real launch would.
   Run `Stop-ScheduledTask` first when the app was closed with Exit: Windows may still count the
-  old instance as running and skip the start.
+  old instance as running and skip the start. Give the task
+  `-Settings (New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries)`:
+  the VM sees the PC's battery, and by default a task stays `Queued` while the PC is unplugged.
 - **Bundles for the app to import go under the user's profile** (for example
   `C:\Users\user\Downloads\bundles`): the unelevated app cannot read `C:\th\configs`.
   `test-infra\bundles.py` builds them, including `bundle-auth.zip` (asks for credentials; the
