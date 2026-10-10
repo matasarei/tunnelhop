@@ -284,6 +284,13 @@ mod tests {
     }
 
     #[test]
+    fn a_menu_item_shows_its_ampersand() {
+        // Undoubled, Windows would underline the next letter and show no "&" at all.
+        assert_eq!(menu_text("tray.disconnect"), "Disconnect && unblock");
+        assert_eq!(menu_text("tray.exit"), "Exit");
+    }
+
+    #[test]
     fn menu_ids_map_back_to_actions() {
         assert_eq!(Action::from_id(ids::ROTATE), Some(Action::Rotate));
         assert_eq!(Action::from_id(ids::EXIT), Some(Action::Exit));
