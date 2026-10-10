@@ -2,10 +2,11 @@
   // The window: the service's state, the same controls as the tray, the bundle's servers, and
   // bundle import, in Fluent 2 (the design system of Windows 11). Every control sends a request;
   // what the window shows changes only with the service's next report, so it never shows
-  // something the service did not do. Editing a bundle's servers arrives with step 28.
+  // something the service did not do.
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { onMount } from "svelte";
+  import AddServers from "$lib/AddServers.svelte";
   import Bundles from "$lib/Bundles.svelte";
   import Confirm from "$lib/Confirm.svelte";
   import Credentials from "$lib/Credentials.svelte";
@@ -22,6 +23,10 @@
   /** What the last import ended in, until dismissed. */
   let notice = $state<string | null>(null);
   let importErrors = $state<string[] | null>(null);
+  /** What the errors above stopped: an import, or an edit of the servers. */
+  let refusedWhat = $state("The bundle was not imported.");
+  /** Config files chosen to become servers, waiting for their names to be confirmed. */
+  let adding = $state<{ bundle: Bundle; files: ipc.ChosenFile[] } | null>(null);
   /** An imported bundle not made active yet, because that would drop the current tunnel. */
   let pendingSwitch = $state<Bundle | null>(null);
   /** The credentials dialog: for a whole bundle (profile null) or one server. */
@@ -74,8 +79,10 @@
         else if (e.payload.type === "drop") {
           dragging = false;
           const paths = e.payload.paths;
-          if (paths.length === 1) importFrom(paths[0]);
-          else error = "Drop one bundle .zip at a time.";
+          // Config files are servers for the bundle in use; anything else is tried as a bundle.
+          if (paths.length > 0 && paths.every((path) => /\.(conf|ovpn)$/i.test(path))) chooseServers(paths);
+          else if (paths.length === 1) importFrom(paths[0]);
+          else error = "Drop one bundle .zip, or .conf and .ovpn files to add as servers.";
         }
       }),
     ];
@@ -116,6 +123,7 @@
     const outcome = await run(() => ipc.importBundle(path));
     if (!outcome || outcome.type === "cancelled") return;
     if (outcome.type === "refused") {
+      refusedWhat = "The bundle was not imported.";
       importErrors = outcome.errors;
       return;
     }
@@ -131,6 +139,71 @@
     }
     refreshBundles();
     if (outcome.needs_credentials.length > 0) asking = { bundle, profile: null };
+  }
+
+  /** Offer the dropped config files, or ones from the native picker, as servers to add. */
+  async function chooseServers(paths?: string[]) {
+    const bundle = report?.bundle;
+    if (!bundle) {
+      error = report
+        ? "Servers are added to the bundle in use: import a bundle or switch to one first."
+        : "The TunnelHop service is not running, so the servers were not added.";
+      return;
+    }
+    if (busy) {
+      error = "The servers were not added: another request was still running. Drop them again.";
+      return;
+    }
+    const files = await run(() => ipc.chooseServers(paths));
+    if (files?.length) adding = { bundle, files };
+  }
+
+  /** Run an edit of a bundle's servers and show what it ended in, as an import does. */
+  async function edit(refused: string, done: (bundle: Bundle) => string, request: () => Promise<ipc.ImportOutcome>) {
+    importErrors = null;
+    notice = null;
+    const outcome = await run(request);
+    if (!outcome || outcome.type === "cancelled") return;
+    if (outcome.type === "refused") {
+      refusedWhat = refused;
+      importErrors = outcome.errors;
+      return;
+    }
+    notice = done(outcome.bundle);
+    refreshBundles();
+    if (outcome.needs_credentials.length > 0) asking = { bundle: outcome.bundle, profile: null };
+  }
+
+  function addServers(bundle: Bundle, files: ipc.ChosenFile[]) {
+    adding = null;
+    const what = files.length === 1 ? `"${files[0].name || "the server"}"` : `${files.length} servers`;
+    edit(
+      files.length === 1 ? "The server was not added." : "The servers were not added.",
+      (edited) => `Added ${what} to "${edited.bundle_name}".`,
+      () => ipc.addServers(bundle.bundle_id, files),
+    );
+  }
+
+  function askRemove(profile: Profile) {
+    const bundle = report?.bundle;
+    if (!bundle) return;
+    const inUse = connected && report?.profile_id === profile.id;
+    const moves = inUse
+      ? "You are connected through it: TunnelHop moves to another server first. "
+      : connected
+        ? "The tunnel reconnects once. "
+        : "";
+    confirming = {
+      title: `Remove "${profile.name}"?`,
+      message: `${moves}${connected ? "The block stays in place meanwhile. " : ""}It is removed from "${bundle.bundle_name}" with its saved sign-in.`,
+      action: "Remove",
+      run: () =>
+        edit(
+          "The server was not removed.",
+          (edited) => `Removed "${profile.name}" from "${edited.bundle_name}".`,
+          () => ipc.removeServers(bundle.bundle_id, [profile.id]),
+        ),
+    };
   }
 
   async function switchTo(bundle: Bundle) {
@@ -229,7 +302,7 @@
   {#if importErrors}
     <fluent-message-bar intent="error" layout="multiline">
       <div>
-        <strong>The bundle was not imported.</strong>
+        <strong>{refusedWhat}</strong>
         {importErrors.length === 1 ? "One problem was found:" : `${importErrors.length} problems were found:`}
         <ul class="errors">
           {#each importErrors as line}<li>{line}</li>{/each}
@@ -290,12 +363,16 @@
   </div>
 
   {#if report?.bundle}
-    <h2>Servers in {report.bundle.bundle_name}</h2>
+    <div class="heading">
+      <h2>Servers in {report.bundle.bundle_name}</h2>
+      <fluent-button size="small" disabled={busy} onclick={() => chooseServers()}>Add server…</fluent-button>
+    </div>
     <Servers
       {report}
       {busy}
       onconnect={(profile) => act({ type: "connect", profile_id: profile.id })}
       oncredentials={(profile) => report?.bundle && (asking = { bundle: report.bundle, profile })}
+      onremove={askRemove}
     />
   {/if}
 
@@ -367,6 +444,17 @@
   <Credentials bundle={asking.bundle} profile={asking.profile} onclose={() => (asking = null)} />
 {/if}
 
+{#if adding}
+  {@const chosen = adding}
+  <AddServers
+    bundle={chosen.bundle}
+    files={chosen.files}
+    reconnects={connected}
+    onadd={(files) => addServers(chosen.bundle, files)}
+    oncancel={() => (adding = null)}
+  />
+{/if}
+
 {#if confirming}
   {@const question = confirming}
   <Confirm
@@ -379,7 +467,7 @@
 {/if}
 
 {#if dragging}
-  <div class="drop" aria-hidden="true"><div>Drop a bundle <code>.zip</code> to import it</div></div>
+  <div class="drop" aria-hidden="true"><div>Drop a bundle <code>.zip</code> to import it, or config files to add as servers</div></div>
 {/if}
 
 <style>

@@ -18,6 +18,7 @@ use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::bundle::MAX_ZIP_BYTES;
+use crate::edit::MAX_CONFIG_BYTES;
 use crate::manifest::Protocol;
 use crate::rotation::State;
 
@@ -47,6 +48,17 @@ pub enum Request {
     DeleteBundle {
         bundle_id: String,
     },
+    /// Add servers to a bundle from config files (SPEC §3.5). The bundle is replaced by a new
+    /// one with a new id; answered like an import.
+    AddProfiles {
+        bundle_id: String,
+        files: Vec<ProfileFile>,
+    },
+    /// Remove servers from a bundle; it is replaced the same way.
+    RemoveProfiles {
+        bundle_id: String,
+        profile_ids: Vec<String>,
+    },
     /// Connect to this profile, or to a random one when `None`.
     Connect {
         profile_id: Option<String>,
@@ -73,6 +85,84 @@ pub enum Request {
         password: Secret,
     },
 }
+
+/// One config file to add as a server. Like a bundle, it travels as bytes: the service never
+/// opens a path the user chose.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileFile {
+    /// The display name; empty means "the file name without its extension".
+    pub name: String,
+    /// The file's own name, without any directory: `.conf` is WireGuard, `.ovpn` OpenVPN.
+    pub file_name: String,
+    pub content_base64: String,
+}
+
+/// A config holds a private key: never printed.
+impl fmt::Debug for ProfileFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ProfileFile")
+            .field("name", &self.name)
+            .field("file_name", &self.file_name)
+            .field("content_base64", &"<redacted>")
+            .finish()
+    }
+}
+
+impl ProfileFile {
+    pub fn new(name: &str, file_name: &str, content: &[u8]) -> Self {
+        ProfileFile {
+            name: name.to_string(),
+            file_name: file_name.to_string(),
+            content_base64: BASE64.encode(content),
+        }
+    }
+
+    /// The file's bytes, enforcing the size limit.
+    pub fn content(&self) -> Result<Vec<u8>, IpcError> {
+        let too_large = || IpcError::Invalid(format!("{} is larger than 1 MB", self.file_name));
+        if self.content_base64.len() > MAX_CONFIG_BYTES / 3 * 4 + 4 {
+            return Err(too_large());
+        }
+        let content = BASE64.decode(&self.content_base64).map_err(|e| {
+            IpcError::Invalid(format!("{} is not valid base64: {e}", self.file_name))
+        })?;
+        if content.len() > MAX_CONFIG_BYTES {
+            return Err(too_large());
+        }
+        Ok(content)
+    }
+
+    fn validate(&self) -> Result<(), IpcError> {
+        let name = &self.file_name;
+        let chars = name.chars().count();
+        if chars == 0 || chars > MAX_FILE_NAME_CHARS {
+            return Err(IpcError::Invalid(format!(
+                "a file name must be 1 to {MAX_FILE_NAME_CHARS} characters"
+            )));
+        }
+        if name.contains(['/', '\\', ':']) || name.chars().any(char::is_control) {
+            return Err(IpcError::Invalid(
+                "a file name must not contain a path or control characters".into(),
+            ));
+        }
+        if crate::edit::protocol_of(name).is_none() {
+            return Err(IpcError::Invalid(format!(
+                "{name}: only .conf (WireGuard) and .ovpn (OpenVPN) files can be added"
+            )));
+        }
+        if self.name.chars().count() > MAX_NAME_CHARS {
+            return Err(IpcError::Invalid(format!(
+                "a server name must be at most {MAX_NAME_CHARS} characters"
+            )));
+        }
+        self.content().map(|_| ())
+    }
+}
+
+const MAX_FILE_NAME_CHARS: usize = 255;
+/// The manifest's limit for a profile name.
+const MAX_NAME_CHARS: usize = 100;
 
 /// A value that must never reach a log: `Debug` prints a placeholder, and the memory is wiped
 /// when the value is dropped.
@@ -108,6 +198,28 @@ impl Request {
             ),
             Request::SelectBundle { bundle_id } | Request::DeleteBundle { bundle_id } => {
                 check_bundle_id(bundle_id)
+            }
+            Request::AddProfiles { bundle_id, files } => {
+                check_bundle_id(bundle_id)?;
+                if files.is_empty() || files.len() > crate::manifest::MAX_PROFILES {
+                    return Err(IpcError::Invalid(format!(
+                        "between 1 and {} files can be added at once",
+                        crate::manifest::MAX_PROFILES
+                    )));
+                }
+                files.iter().try_for_each(ProfileFile::validate)
+            }
+            Request::RemoveProfiles {
+                bundle_id,
+                profile_ids,
+            } => {
+                check_bundle_id(bundle_id)?;
+                if profile_ids.is_empty() || profile_ids.len() > crate::manifest::MAX_PROFILES {
+                    return Err(IpcError::Invalid(
+                        "name at least one server to remove".into(),
+                    ));
+                }
+                profile_ids.iter().try_for_each(|id| check_profile_id(id))
             }
             Request::Connect {
                 profile_id: Some(id),

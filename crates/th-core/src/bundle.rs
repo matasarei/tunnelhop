@@ -24,7 +24,7 @@ pub const MAX_COMPRESSION_RATIO: u64 = 100;
 /// The most bundles installed at once (SPEC §3.5).
 pub const MAX_BUNDLES: usize = 20;
 
-const MANIFEST_FILE: &str = "manifest.json";
+pub(crate) const MANIFEST_FILE: &str = "manifest.json";
 const STAGING_PREFIX: &str = ".staging-";
 const STALE_STAGING_AGE: Duration = Duration::from_secs(60 * 60);
 
@@ -214,7 +214,7 @@ pub fn remove(root: &Path, id: &BundleId) -> io::Result<()> {
     }
 }
 
-fn read_installed_manifest(dir: &Path) -> Result<Manifest, Vec<ImportError>> {
+pub(crate) fn read_installed_manifest(dir: &Path) -> Result<Manifest, Vec<ImportError>> {
     let bytes = fs::read(dir.join(MANIFEST_FILE)).map_err(|e| {
         vec![ImportError::archive(format!(
             "installed bundle is unreadable: {e}"

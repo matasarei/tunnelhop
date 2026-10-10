@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use th_core::driver::{TunnelEvent, VpnDriver};
-use th_core::ipc::{self, Event, Request, Response, Secret, StatusReport};
+use th_core::ipc::{self, Event, ProfileFile, Request, Response, Secret, StatusReport};
 use th_core::manifest::Protocol;
 use th_core::rotation::State;
 use th_core::testing::{CallLog, FakeKillSwitch, FakeProbe, MockDriver};
@@ -756,4 +756,266 @@ async fn a_damaged_bundle_is_listed_so_that_it_can_be_deleted() {
     let (bundles, _) = listed(lab.orchestrator.handle(Request::ListBundles).await);
     assert_eq!(bundles, [("Damaged bundle".to_string(), id.clone())]);
     assert_eq!(listed(delete(&lab, &id).await), (Vec::new(), None));
+}
+
+/// Add one config file to a bundle.
+async fn add(lab: &Lab, bundle_id: &str, file_name: &str, content: &str) -> Response {
+    lab.orchestrator
+        .handle(Request::AddProfiles {
+            bundle_id: bundle_id.to_string(),
+            files: vec![ProfileFile::new("", file_name, content.as_bytes())],
+        })
+        .await
+}
+
+async fn remove(lab: &Lab, bundle_id: &str, profile_ids: &[&str]) -> Response {
+    lab.orchestrator
+        .handle(Request::RemoveProfiles {
+            bundle_id: bundle_id.to_string(),
+            profile_ids: profile_ids.iter().map(|id| id.to_string()).collect(),
+        })
+        .await
+}
+
+/// An `Imported` answer as the new bundle's id, its profile ids, and who still needs sign-in.
+fn edited(response: Response) -> (String, Vec<String>, Vec<String>) {
+    match response {
+        Response::Imported {
+            bundle,
+            needs_credentials,
+            ..
+        } => (
+            bundle.bundle_id,
+            bundle.profiles.into_iter().map(|p| p.id).collect(),
+            needs_credentials,
+        ),
+        other => panic!("expected an edited bundle, got {other:?}"),
+    }
+}
+
+async fn connect(lab: &Lab, profile: &str) -> StatusReport {
+    report(
+        lab.orchestrator
+            .handle(Request::Connect {
+                profile_id: Some(profile.into()),
+            })
+            .await,
+    )
+}
+
+#[tokio::test]
+async fn an_edit_replaces_the_bundle_and_carries_its_credentials_over() {
+    let lab = lab().await;
+    let old = imported_as(&lab, "Lab").await;
+    report(
+        lab.orchestrator
+            .handle(Request::SetCredentials {
+                bundle_id: old.clone(),
+                profile_ids: Vec::new(),
+                username: "user".into(),
+                password: Secret::new("secret"),
+            })
+            .await,
+    );
+
+    let (new, profiles, needs) =
+        edited(add(&lab, &old, "NL 1.conf", &wireguard("198.51.100.20:51820")).await);
+
+    assert_ne!(new, old);
+    assert_eq!(profiles, ["wg-a", "wg-b", "ovpn", "nl-1"]);
+    assert!(needs.is_empty(), "the saved sign-in came along: {needs:?}");
+    let (bundles, active) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(bundles, [("Lab".to_string(), new.clone())]);
+    assert_eq!(active, None, "it was not the active bundle");
+    assert!(!lab.layout.bundles().join(&old).exists());
+    assert!(!lab.layout.credentials().join(&old).exists());
+    assert!(lab.layout.credentials().join(&new).is_dir());
+
+    let (newer, profiles, _) = edited(remove(&lab, &new, &["wg-b", "ovpn"]).await);
+    assert_eq!(profiles, ["wg-a", "nl-1"]);
+    let (bundles, _) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(bundles, [("Lab".to_string(), newer)]);
+}
+
+#[tokio::test]
+async fn an_added_profile_that_asks_for_sign_in_is_reported() {
+    let lab = lab().await;
+    let old = imported_as(&lab, "Lab").await;
+    let (_, profiles, needs) = edited(add(&lab, &old, "se.ovpn", OPENVPN).await);
+    assert_eq!(profiles, ["wg-a", "wg-b", "ovpn", "se"]);
+    assert_eq!(needs, ["ovpn", "se"]);
+}
+
+#[tokio::test]
+async fn an_edit_that_is_refused_changes_nothing() {
+    let lab = lab().await;
+    let id = imported_and_selected(&lab).await;
+    let hostile =
+        wireguard("198.51.100.20:51820").replace("[Interface]\n", "[Interface]\nPostUp = x\n");
+
+    let response = add(&lab, &id, "evil.conf", &hostile).await;
+    let Response::ImportFailed { errors } = &response else {
+        panic!("{response:?}");
+    };
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.starts_with("wireguard/evil.conf:2") && e.contains("PostUp")),
+        "{errors:?}"
+    );
+    let response = remove(&lab, &id, &["wg-a", "wg-b", "ovpn"]).await;
+    assert!(
+        matches!(&response, Response::ImportFailed { errors } if errors[0].contains("at least one")),
+        "{response:?}"
+    );
+    let response = remove(&lab, &id, &["nope"]).await;
+    assert!(
+        matches!(&response, Response::ImportFailed { .. }),
+        "{response:?}"
+    );
+    let response = remove(&lab, "0123456789abcdef", &["wg-a"]).await;
+    assert!(is_error(&response, "not installed"), "{response:?}");
+
+    let (bundles, active) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(bundles, [("Lab".to_string(), id.clone())]);
+    assert_eq!(active, Some(id));
+    assert!(lab.log.take().is_empty(), "nothing was touched");
+}
+
+#[tokio::test]
+async fn editing_the_bundle_in_use_keeps_the_block_and_the_server() {
+    let lab = lab().await;
+    let old = imported_and_selected(&lab).await;
+    connect(&lab, "wg-a").await;
+    lab.log.take();
+
+    let (new, _, _) = edited(add(&lab, &old, "nl.conf", &wireguard("198.51.100.20:51820")).await);
+
+    let log = lab.log.take();
+    assert!(!log.contains(&"disengage".to_string()), "{log:?}");
+    let position = |entry: &str| log.iter().position(|e| e == entry);
+    let block = log.iter().position(|e| e.starts_with("engage:"));
+    assert!(block.is_some(), "{log:?}");
+    assert!(block < position("disconnect:wg-a"), "{log:?}");
+    assert!(
+        position("disconnect:wg-a") < position("connect:wg-a"),
+        "{log:?}"
+    );
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Connected);
+    assert_eq!(status.profile_id.as_deref(), Some("wg-a"));
+    assert!(status.killswitch_engaged);
+    assert_eq!(status.bundle.unwrap().bundle_id, new);
+    let saved = Settings::load(&lab.layout.settings_file()).unwrap();
+    assert_eq!(saved.active_bundle.as_deref(), Some(new.as_str()));
+    assert_eq!(saved.selected_profile.as_deref(), Some("wg-a"));
+}
+
+#[tokio::test]
+async fn removing_the_server_in_use_moves_to_another_with_the_block_held() {
+    let lab = lab().await;
+    let old = imported_and_selected(&lab).await;
+    connect(&lab, "wg-a").await;
+    lab.log.take();
+
+    let (new, profiles, _) = edited(remove(&lab, &old, &["wg-a"]).await);
+
+    assert_eq!(profiles, ["wg-b", "ovpn"]);
+    let log = lab.log.take();
+    assert!(!log.contains(&"disengage".to_string()), "{log:?}");
+    assert!(log.contains(&"disconnect:wg-a".to_string()), "{log:?}");
+    assert!(log.contains(&"connect:wg-b".to_string()), "{log:?}");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Connected);
+    assert_eq!(status.profile_id.as_deref(), Some("wg-b"));
+    assert!(status.killswitch_engaged);
+    assert_eq!(status.bundle.unwrap().bundle_id, new);
+    let saved = Settings::load(&lab.layout.settings_file()).unwrap();
+    assert_eq!(saved.selected_profile, None, "it named the removed server");
+}
+
+#[tokio::test]
+async fn an_edit_tries_the_same_server_once_and_then_rotates() {
+    let log = CallLog::default();
+    let driver = Arc::new(MockDriver::new(log.clone()));
+    let lab = lab_with(tempfile::tempdir().unwrap(), false, log, driver.clone()).await;
+    let old = imported_and_selected(&lab).await;
+    connect(&lab, "wg-a").await;
+    driver.fail_connect("wg-a");
+    lab.log.take();
+
+    edited(add(&lab, &old, "nl.conf", &wireguard("198.51.100.20:51820")).await);
+
+    let log = lab.log.take();
+    assert!(!log.contains(&"disengage".to_string()), "{log:?}");
+    let tries = log.iter().filter(|e| *e == "connect:wg-a").count();
+    assert!(tries >= 1, "{log:?}");
+    let first_other = log
+        .iter()
+        .position(|e| e == "connect:wg-b" || e == "connect:nl")
+        .expect("it moved on");
+    let second_try = log
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| *e == "connect:wg-a")
+        .nth(1)
+        .map(|(i, _)| i);
+    assert!(
+        second_try.is_none_or(|i| i > first_other),
+        "another server was tried before wg-a a second time: {log:?}"
+    );
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Connected);
+    assert_ne!(status.profile_id.as_deref(), Some("wg-a"));
+    assert!(status.killswitch_engaged);
+}
+
+#[tokio::test]
+async fn an_edit_that_cannot_reconnect_ends_blocked_not_open() {
+    let log = CallLog::default();
+    let driver = Arc::new(MockDriver::new(log.clone()));
+    let lab = lab_with(tempfile::tempdir().unwrap(), false, log, driver.clone()).await;
+    let old = imported_and_selected(&lab).await;
+    connect(&lab, "wg-a").await;
+    driver.fail_connect("wg-a");
+    driver.fail_connect("wg-b");
+    driver.fail_connect("nl");
+    lab.log.take();
+
+    let (new, _, _) = edited(add(&lab, &old, "nl.conf", &wireguard("198.51.100.20:51820")).await);
+
+    let log = lab.log.take();
+    assert!(!log.contains(&"disengage".to_string()), "{log:?}");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Blocked);
+    assert!(status.killswitch_engaged);
+    assert_eq!(
+        status.bundle.unwrap().bundle_id,
+        new,
+        "the edit itself stands"
+    );
+}
+
+#[tokio::test]
+async fn editing_without_a_tunnel_starts_none() {
+    let lab = lab().await;
+    let old = imported_and_selected(&lab).await;
+    lab.log.take();
+
+    let (new, _, _) = edited(add(&lab, &old, "nl.conf", &wireguard("198.51.100.20:51820")).await);
+
+    assert!(lab.log.take().is_empty(), "no tunnel, no block");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Disconnected);
+    assert_eq!(status.bundle.unwrap().bundle_id, new);
+
+    // And a bundle that is not the one in use leaves the tunnel of the one that is.
+    connect(&lab, "wg-a").await;
+    let other = imported_as(&lab, "Other lab").await;
+    lab.log.take();
+    edited(remove(&lab, &other, &["wg-b"]).await);
+    assert!(lab.log.take().is_empty(), "the tunnel was not touched");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Connected);
+    assert_eq!(status.bundle.unwrap().bundle_id, new);
 }

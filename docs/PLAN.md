@@ -381,7 +381,32 @@ step (or per closely related pair), opened as a PR against `main`.
       `crates/th-service/src/credentials.rs` (`remove_bundle`, already there), the dashboard.
     - Test: orchestrator tests for list, delete (active and not), and the cap; in the VM, switch
       and delete through the UI.
-28. [ ] Edit a bundle's servers: add `.conf`/`.ovpn` files, remove profiles (SPEC §3.5).
+28. [x] Edit a bundle's servers: add `.conf`/`.ovpn` files, remove profiles (SPEC §3.5).
+    - Landed: `th-core/src/edit.rs` (ids from file names, the deterministic rebuild);
+      `AddProfiles`/`RemoveProfiles` and `ProfileFile` in the IPC; `Orchestrator::edit` and
+      `swap_active`; `Rotator::hand_over`; `CredentialStore::carry_over`; `ctl add` and
+      `ctl remove`; the app's `choose_servers`, `add_servers`, `remove_servers`;
+      `AddServers.svelte`, Remove in `Servers.svelte`; `leak-test.ps1 -Watch`.
+    - Ruling: after an edit of the bundle in use, the service reconnects to the same server
+      when it is still there, and rotates only if that fails or the server was removed.
+    - Ruling: an edit is not counted against the 20-bundle cap; the edited bundle takes the
+      old one's place.
+    - Ruling: an added file's id must also be free as a file name, whatever the case; a name
+      that gives no usable id (or a Windows device name) becomes `server` or `server-<name>`.
+    - Ruling: removing servers does not prune an explicit `protocols` list; if no remaining
+      server uses a listed protocol, the import refuses the edit.
+    - Ruling: dropped files that are all `.conf`/`.ovpn` are servers for the bundle in use;
+      any other single file is tried as a bundle.
+    - Checked in `th-test` under `leak-test.ps1 -Watch`, tunnel up throughout. First
+      capture (100 s), through `ctl`: add `ovpn.ovpn` (stayed on the same server), connect
+      to it, remove it while in use (moved to WireGuard). Second capture (75 s), through the
+      window by keyboard: connect to an added server and remove it while in use. Both: 0
+      frames sent by the VM outside the tunnel, 0 samples with the kill-switch off.
+    - Also through the window, not inside a capture I can vouch for: adding
+      `ovpn-auth.ovpn` with an edited name while connected (the tunnel stayed on its server)
+      and signing in when prompted.
+    - Not checked by me: dropping config files on the window (needs a mouse), and a hostile
+      file through the window (covered by th-core and orchestrator tests).
     - IPC: `AddProfiles { bundle_id, files: [{ name, file_name, content_base64 }] }` and
       `RemoveProfiles { bundle_id, profile_ids }`, both answered like an import (`Imported` or
       `ImportFailed` with every error).
@@ -626,4 +651,6 @@ Still open:
   credentials prompt, landed on `feature/dashboard-import` and was checked in `th-test`.
 - **2026-10-10:** step 18 merged (PR #14). Step 27, bundle management, landed on
   `feature/bundle-management` and was checked in `th-test`.
-- **Next:** step 28, editing a bundle's servers; then 19.
+- **2026-10-10:** step 27 merged (PR #15). Step 28, editing a bundle's servers, landed on
+  `feature/edit-servers` and was checked in `th-test` under the leak capture.
+- **Next:** step 19, the installer and `docs/TESTING.md`.

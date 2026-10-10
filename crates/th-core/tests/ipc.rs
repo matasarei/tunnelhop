@@ -2,9 +2,11 @@ use std::net::{IpAddr, Ipv4Addr};
 
 use serde_json::json;
 use th_core::bundle::MAX_ZIP_BYTES;
+use th_core::edit::MAX_CONFIG_BYTES;
 use th_core::ipc::{
     self, Availability, BundleInfo, ClientMessage, Event, FrameBuffer, IpcError, MAX_FRAME_BYTES,
-    PROTOCOL_VERSION, ProfileInfo, Request, Response, RuntimeInfo, ServerMessage, StatusReport,
+    PROTOCOL_VERSION, ProfileFile, ProfileInfo, Request, Response, RuntimeInfo, ServerMessage,
+    StatusReport,
 };
 use th_core::manifest::Protocol;
 use th_core::rotation::State;
@@ -380,4 +382,123 @@ fn secrets_are_wiped_when_dropped() {
     let mut secret = ipc::Secret::new("hunter2");
     zeroize::Zeroize::zeroize(&mut secret);
     assert_eq!(secret.expose(), "");
+}
+
+fn add_profiles(files: Vec<ProfileFile>) -> Request {
+    Request::AddProfiles {
+        bundle_id: "0123456789abcdef".into(),
+        files,
+    }
+}
+
+#[test]
+fn edits_round_trip_and_validate() {
+    let add = add_profiles(vec![ProfileFile::new(
+        "NL 1",
+        "nl-1.conf",
+        b"[Interface]\n",
+    )]);
+    let remove = Request::RemoveProfiles {
+        bundle_id: "0123456789abcdef".into(),
+        profile_ids: vec!["wg-a".into()],
+    };
+    for (id, request) in [add, remove].into_iter().enumerate() {
+        assert!(request.validate().is_ok(), "{request:?}");
+        let message = ClientMessage {
+            id: id as u64,
+            request,
+        };
+        let back: ClientMessage = ipc::decode(ipc::encode(&message).trim_ascii_end()).unwrap();
+        assert_eq!(back, message);
+    }
+    assert_eq!(
+        ProfileFile::new("", "a.conf", b"\x00\xffbytes")
+            .content()
+            .unwrap(),
+        b"\x00\xffbytes"
+    );
+}
+
+#[test]
+fn files_to_add_are_checked_before_the_service_sees_them() {
+    let ok = |name: &str, file_name: &str| ProfileFile::new(name, file_name, b"x");
+    for (why, files) in [
+        ("no file", vec![]),
+        ("a path", vec![ok("", "..\\..\\evil.conf")]),
+        ("a path", vec![ok("", "dir/evil.conf")]),
+        ("a drive", vec![ok("", "C:evil.conf")]),
+        ("a control character", vec![ok("", "a\nb.conf")]),
+        ("no name", vec![ok("", "")]),
+        ("another extension", vec![ok("", "notes.txt")]),
+        ("no extension", vec![ok("", "conf")]),
+        (
+            "a long file name",
+            vec![ok("", &format!("{}.conf", "a".repeat(260)))],
+        ),
+        ("a long display name", vec![ok(&"n".repeat(101), "a.conf")]),
+        (
+            "content that is not base64",
+            vec![ProfileFile {
+                name: String::new(),
+                file_name: "a.conf".into(),
+                content_base64: "%%%".into(),
+            }],
+        ),
+        (
+            "content over 1 MB",
+            vec![ProfileFile::new(
+                "",
+                "a.conf",
+                &vec![0u8; MAX_CONFIG_BYTES + 1],
+            )],
+        ),
+        (
+            "one bad file among good ones",
+            vec![ok("", "a.conf"), ok("", "b.exe")],
+        ),
+    ] {
+        assert!(add_profiles(files).validate().is_err(), "{why}");
+    }
+    assert!(
+        add_profiles(vec![ProfileFile::new(
+            "",
+            "a.OVPN",
+            &vec![0u8; MAX_CONFIG_BYTES]
+        )])
+        .validate()
+        .is_ok(),
+        "exactly 1 MB, any case of extension"
+    );
+    assert!(
+        Request::AddProfiles {
+            bundle_id: "../x".into(),
+            files: vec![ok("", "a.conf")],
+        }
+        .validate()
+        .is_err()
+    );
+
+    let remove = |ids: Vec<&str>| Request::RemoveProfiles {
+        bundle_id: "0123456789abcdef".into(),
+        profile_ids: ids.into_iter().map(String::from).collect(),
+    };
+    assert!(remove(vec![]).validate().is_err());
+    assert!(remove(vec!["wg-a", "UPPER"]).validate().is_err());
+    assert!(remove(vec!["wg-a", "ovpn"]).validate().is_ok());
+}
+
+#[test]
+fn a_config_never_appears_in_debug_output() {
+    let request = add_profiles(vec![ProfileFile::new(
+        "NL 1",
+        "nl-1.conf",
+        b"PrivateKey = c2VjcmV0",
+    )]);
+    let printed = format!("{request:?}");
+    assert!(printed.contains("nl-1.conf"));
+    assert!(printed.contains("<redacted>"));
+    assert!(
+        !printed.contains(&ipc::encode_zip(b"PrivateKey = c2VjcmV0")),
+        "{printed}"
+    );
 }

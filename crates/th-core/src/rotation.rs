@@ -162,6 +162,13 @@ impl Rotator {
         self.current = tunnel;
     }
 
+    /// Give up the tunnel and the block without touching either, for another `Rotator` to
+    /// [`adopt`](Self::adopt): the bundle was replaced by an edited one (SPEC §3.5), and
+    /// nothing may flow outside the tunnel while the new one takes over.
+    pub fn hand_over(self) -> (Option<TunnelHandle>, bool) {
+        (self.current, self.engaged)
+    }
+
     pub fn status(&self) -> Status {
         Status {
             state: self.state,
@@ -291,6 +298,24 @@ impl Rotator {
             )));
         }
         self.switch(vec![profile_id.to_string()], None, now).await
+    }
+
+    /// Switch to `profile_id` if one attempt at it works, and to any other profile if not.
+    /// For a bundle replaced by an edited one (SPEC §3.5): staying on the same server keeps
+    /// the public IP, but it is not worth several attempts with traffic blocked meanwhile.
+    pub async fn reconnect_or_rotate(
+        &mut self,
+        profile_id: &str,
+        now: Instant,
+    ) -> Result<Status, RotationError> {
+        if self.usable_profiles().iter().any(|p| p == profile_id) {
+            match self.attempt(profile_id, None).await {
+                Ok((handle, ip)) => return Ok(self.settle(handle, ip, None, now).await),
+                Err(AttemptError::Fatal(error)) => return Err(self.fatal(error)),
+                Err(AttemptError::Retry(_) | AttemptError::SameIp(_)) => {}
+            }
+        }
+        self.rotate(Trigger::Manual, now).await
     }
 
     /// Bring everything down and lift the kill-switch ("Disconnect & unblock", Exit).

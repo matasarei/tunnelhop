@@ -186,6 +186,33 @@ impl<V: Vault> CredentialStore<V> {
         Ok(())
     }
 
+    /// Give the bundle `to` the credentials of `from`: the bundle default, and those of each
+    /// profile in `profiles` (an edited bundle keeps its ids, SPEC §3.5). The sealed files are
+    /// copied as they are, never opened. What `to` already has is left alone.
+    pub fn carry_over(
+        &self,
+        from: &BundleId,
+        to: &BundleId,
+        profiles: &[&str],
+    ) -> Result<(), CredentialError> {
+        let scopes =
+            std::iter::once(Scope::Bundle).chain(profiles.iter().map(|p| Scope::Profile(p)));
+        for scope in scopes {
+            let target = self.path(to, scope)?;
+            if target.exists() {
+                continue;
+            }
+            let sealed = match fs::read(self.path(from, scope)?) {
+                Ok(sealed) => sealed,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e.into()),
+            };
+            fs::create_dir_all(target.parent().expect("credential files have a parent"))?;
+            write_atomic(&target, &sealed)?;
+        }
+        Ok(())
+    }
+
     /// Forget every credential of a bundle.
     pub fn remove_bundle(&self, bundle: &BundleId) -> io::Result<()> {
         match fs::remove_dir_all(self.dir.join(bundle.as_str())) {
@@ -389,6 +416,64 @@ mod tests {
         store.remove_bundle(&bundle()).unwrap();
         assert!(!store.has(&bundle(), "p1"));
         assert!(store.has(&other, "p1"));
+    }
+
+    #[test]
+    fn credentials_are_carried_over_for_the_named_profiles_only() {
+        let (_dir, store) = store();
+        let edited = BundleId::parse("fedcba9876543210").unwrap();
+        store
+            .set(&bundle(), Scope::Bundle, &credentials("all", "1"))
+            .unwrap();
+        store
+            .set(&bundle(), Scope::Profile("kept"), &credentials("kept", "2"))
+            .unwrap();
+        store
+            .set(&bundle(), Scope::Profile("gone"), &credentials("gone", "3"))
+            .unwrap();
+        // What the new bundle already has is not overwritten.
+        store
+            .set(&edited, Scope::Profile("own"), &credentials("own", "4"))
+            .unwrap();
+        store
+            .set(&bundle(), Scope::Profile("own"), &credentials("old", "5"))
+            .unwrap();
+
+        store
+            .carry_over(&bundle(), &edited, &["kept", "own", "never-had-any"])
+            .unwrap();
+
+        let user = |profile: &str| {
+            store
+                .get(&edited, profile)
+                .unwrap()
+                .unwrap()
+                .username
+                .clone()
+        };
+        assert_eq!(user("kept"), "kept");
+        assert_eq!(user("own"), "own");
+        assert_eq!(user("never-had-any"), "all", "the bundle default");
+        assert!(
+            !store
+                .path(&edited, Scope::Profile("gone"))
+                .unwrap()
+                .exists()
+        );
+        assert_eq!(
+            store
+                .get(&bundle(), "kept")
+                .unwrap()
+                .unwrap()
+                .username
+                .clone(),
+            "kept",
+            "the old bundle keeps its own until it is removed"
+        );
+        assert!(matches!(
+            store.carry_over(&bundle(), &edited, &["../x"]),
+            Err(CredentialError::InvalidProfile(_))
+        ));
     }
 
     fn manifest() -> Manifest {
