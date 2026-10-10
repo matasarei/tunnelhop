@@ -162,6 +162,13 @@ impl Rotator {
         self.current = tunnel;
     }
 
+    /// Give up the tunnel and the block without touching either, for another `Rotator` to
+    /// [`adopt`](Self::adopt): the bundle was replaced by an edited one (SPEC §3.5), and
+    /// nothing may flow outside the tunnel while the new one takes over.
+    pub fn hand_over(self) -> (Option<TunnelHandle>, bool) {
+        (self.current, self.engaged)
+    }
+
     pub fn status(&self) -> Status {
         Status {
             state: self.state,

@@ -18,8 +18,10 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 use th_core::bundle::{self, BundleId, ImportedBundle, MAX_BUNDLES};
 use th_core::driver::{ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelHandle, VpnDriver};
+use th_core::edit::{self, Edit, NewProfile};
 use th_core::ipc::{self, BundleInfo, Event, Request, Response, RuntimeInfo, StatusReport};
 use th_core::manifest::Protocol;
+use th_core::rotation::RotationError;
 use th_core::rotation::{KillSwitch, Overrides, Probe, Resolver, Rotator, State, Status, Trigger};
 use th_core::sanitize::Endpoint;
 use th_core::tunnel_name::tunnel_name;
@@ -238,6 +240,29 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Request::SelectBundle { bundle_id } => self.select(&mut inner, &bundle_id).await,
             Request::ListBundles => self.list().await,
             Request::DeleteBundle { bundle_id } => self.delete(&mut inner, &bundle_id).await,
+            Request::AddProfiles { bundle_id, files } => {
+                let new: Result<Vec<NewProfile>, _> = files
+                    .iter()
+                    .map(|file| {
+                        file.content().map(|content| NewProfile {
+                            name: file.name.clone(),
+                            file_name: file.file_name.clone(),
+                            content,
+                        })
+                    })
+                    .collect();
+                match new {
+                    Ok(new) => self.edit(&mut inner, &bundle_id, Edit::Add(new), now).await,
+                    Err(e) => error(e),
+                }
+            }
+            Request::RemoveProfiles {
+                bundle_id,
+                profile_ids,
+            } => {
+                self.edit(&mut inner, &bundle_id, Edit::Remove(profile_ids), now)
+                    .await
+            }
             Request::Connect { profile_id } => {
                 if inner.active.is_none() {
                     return error("import and select a bundle first");
@@ -478,6 +503,137 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         }
         log::info!("deleted bundle {id}");
         self.list().await
+    }
+
+    /// Replace a bundle by a copy with servers added or removed (SPEC §3.5). The copy goes
+    /// through the normal import; only then do the credentials move, the active bundle
+    /// change and the old bundle go. An edit the import refuses changes nothing.
+    async fn edit(&self, inner: &mut Inner, bundle_id: &str, edit: Edit, now: Instant) -> Response {
+        let Some(old) = BundleId::parse(bundle_id) else {
+            return error("bundle id must be 16 lowercase hex characters");
+        };
+        let root = self.layout.bundles();
+        match bundle::installed(&root) {
+            Ok(installed) if installed.contains(&old) => {}
+            Ok(_) => return error(format!("bundle {old} is not installed")),
+            Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
+        }
+        // Not counted against the cap: the edited bundle takes the old one's place.
+        let (store, source) = (root.clone(), old.clone());
+        let built = tokio::task::spawn_blocking(move || {
+            let zip = edit::rebuild(&store, &source, &edit)?;
+            bundle::import(&zip, &store)
+        })
+        .await;
+        let imported = match built {
+            Ok(Ok(imported)) => imported,
+            Ok(Err(errors)) => {
+                return Response::ImportFailed {
+                    errors: errors.iter().map(ToString::to_string).collect(),
+                };
+            }
+            Err(e) => return error(format!("the edit failed: {e}")),
+        };
+        let new = imported.id.clone();
+
+        let kept: Vec<&str> = imported
+            .manifest
+            .profiles
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        let carried = self
+            .credentials
+            .carry_over(&old, &new, &kept)
+            .and_then(|()| self.credentials.store_imported(&imported));
+        if let Err(e) = carried {
+            if !imported.already_present && new != old {
+                let _ = self.credentials.remove_bundle(&new);
+                let _ = bundle::remove(&root, &new);
+            }
+            return error(format!(
+                "the saved sign-in could not be carried over, so nothing was changed: {e}"
+            ));
+        }
+
+        if new != old && inner.active.as_ref().is_some_and(|a| a.bundle.id == old) {
+            self.swap_active(inner, &imported, now).await;
+        }
+        if new != old {
+            // The edit is done either way; leftovers of the old bundle only take up space.
+            if let Err(e) = self.credentials.remove_bundle(&old) {
+                log::warn!("could not remove the credentials of the replaced bundle {old}: {e}");
+            }
+            if let Err(e) = bundle::remove(&root, &old) {
+                log::warn!("could not remove the replaced bundle {old}: {e}");
+            }
+        }
+        log::info!(
+            "bundle {old} became {new} ({})",
+            imported.manifest.bundle_name
+        );
+        let missing = self.missing_credentials(&imported);
+        self.publish(inner);
+        Response::Imported {
+            bundle: bundle_info(&new, &imported.manifest, &imported.needs_credentials, |p| {
+                self.credentials.has(&new, p)
+            }),
+            already_present: imported.already_present,
+            needs_credentials: imported
+                .needs_credentials
+                .iter()
+                .filter(|p| missing.contains(*p))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Make the edited bundle the active one in place of the bundle it replaces. A tunnel
+    /// that is up belongs to the old bundle, so the engine moves to one of the new bundle:
+    /// it takes over the old tunnel and the block as they are and switches as in any
+    /// rotation, with the kill-switch in place throughout.
+    async fn swap_active(&self, inner: &mut Inner, imported: &ImportedBundle, now: Instant) {
+        let previous = inner.active.take().expect("the caller checked");
+        let (tunnel, engaged) = previous.rotator.hand_over();
+        let has = |id: &String| imported.manifest.profiles.iter().any(|p| &p.id == id);
+        // The same server again when it is still there: an edit should not change the exit.
+        let same = tunnel.as_ref().map(|t| t.profile_id.clone()).filter(has);
+        let was_up = tunnel.is_some();
+
+        let mut rotator = self.rotator(imported, &inner.settings);
+        rotator.adopt(tunnel, engaged, now);
+        inner.settings.active_bundle = Some(imported.id.as_str().to_string());
+        if inner
+            .settings
+            .selected_profile
+            .as_ref()
+            .is_some_and(|p| !has(p))
+        {
+            inner.settings.selected_profile = None;
+        }
+        self.save(&inner.settings);
+        inner.active = Some(Active {
+            bundle: imported.clone(),
+            rotator,
+        });
+        if !was_up {
+            return;
+        }
+        let active = inner.active.as_mut().expect("set above");
+        let mut result = match &same {
+            Some(id) => active.rotator.connect_to(id, now).await,
+            None => active.rotator.rotate(Trigger::Manual, now).await,
+        };
+        if same.is_some()
+            && matches!(
+                result,
+                Err(RotationError::Exhausted(_) | RotationError::NoCandidates(_))
+            )
+        {
+            result = active.rotator.rotate(Trigger::Manual, now).await;
+        }
+        // Publishes, and alerts when the edit ended blocked.
+        self.finish(inner, result);
     }
 
     async fn rotate(&self, inner: &mut Inner, trigger: Trigger, now: Instant) -> Response {

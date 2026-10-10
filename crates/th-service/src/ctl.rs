@@ -6,7 +6,9 @@
 
 use std::error::Error;
 
-use th_core::ipc::{self, ClientMessage, PROTOCOL_VERSION, Request, Response, ServerMessage};
+use th_core::ipc::{
+    self, ClientMessage, PROTOCOL_VERSION, ProfileFile, Request, Response, ServerMessage,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 use crate::pipe::{self, PIPE_NAME};
@@ -18,6 +20,8 @@ pub const USAGE: &str = "usage: th-service ctl <command>
   select <bundle id>          make an imported bundle the active one
   bundles                     every installed bundle, and the active one
   delete <bundle id>          delete an installed bundle and its credentials
+  add <bundle id> <file>...   add .conf/.ovpn files as servers (prints the new bundle id)
+  remove <bundle id> <id>...  remove servers by profile id (prints the new bundle id)
   connect [profile]           connect to a profile, or a random one
   rotate                      rotate now
   disconnect                  disconnect and lift the kill-switch
@@ -42,6 +46,25 @@ pub fn request(arguments: &[String]) -> Result<Option<Request>, String> {
         ["bundles"] => Request::ListBundles,
         ["delete", id] => Request::DeleteBundle {
             bundle_id: id.to_string(),
+        },
+        ["add", id, paths @ ..] if !paths.is_empty() => {
+            let mut files = Vec::new();
+            for path in paths {
+                let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+                let file_name = std::path::Path::new(path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .ok_or_else(|| format!("{path} has no usable file name"))?;
+                files.push(ProfileFile::new("", file_name, &bytes));
+            }
+            Request::AddProfiles {
+                bundle_id: id.to_string(),
+                files,
+            }
+        }
+        ["remove", id, profiles @ ..] if !profiles.is_empty() => Request::RemoveProfiles {
+            bundle_id: id.to_string(),
+            profile_ids: profiles.iter().map(|p| p.to_string()).collect(),
         },
         ["connect"] => Request::Connect { profile_id: None },
         ["connect", profile] => Request::Connect {
@@ -159,7 +182,33 @@ mod tests {
                 bundle_id: "0123456789abcdef".into()
             }))
         );
+        assert_eq!(
+            request(&args("remove 0123456789abcdef wg-a ovpn")),
+            Ok(Some(Request::RemoveProfiles {
+                bundle_id: "0123456789abcdef".into(),
+                profile_ids: vec!["wg-a".into(), "ovpn".into()],
+            }))
+        );
         assert_eq!(request(&args("watch")), Ok(None));
+    }
+
+    #[test]
+    fn add_reads_the_files_and_sends_their_names_without_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nl-1.conf");
+        std::fs::write(&path, b"[Interface]\n").unwrap();
+        let line = vec![
+            "add".to_string(),
+            "0123456789abcdef".to_string(),
+            path.to_str().unwrap().to_string(),
+        ];
+        assert_eq!(
+            request(&line),
+            Ok(Some(Request::AddProfiles {
+                bundle_id: "0123456789abcdef".into(),
+                files: vec![ProfileFile::new("", "nl-1.conf", b"[Interface]\n")],
+            }))
+        );
     }
 
     #[test]
@@ -172,6 +221,10 @@ mod tests {
             "auto maybe",
             "select ../x",
             "delete ../x",
+            "add 0123456789abcdef",
+            "add 0123456789abcdef C:\\no\\such\\file.conf",
+            "remove 0123456789abcdef",
+            "remove 0123456789abcdef UPPER",
             "delete",
             "connect UPPER",
             "import",
