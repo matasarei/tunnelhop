@@ -166,10 +166,12 @@ fn add(
             !taken_ids.contains(id) && !taken_files.contains(&path_of(id))
         });
         let file = path_of(&id);
-        let name = match profile.name.trim() {
-            "" => stem(&profile.file_name).trim().to_string(),
-            name => name.to_string(),
-        };
+        // The given name, else the file's, else (a file called just `.conf`) the id.
+        let name = [profile.name.trim(), stem(&profile.file_name).trim(), &id]
+            .into_iter()
+            .find(|name| !name.is_empty())
+            .expect("an id is never empty")
+            .to_string();
         if let Some(listed) = &mut manifest.protocols
             && !listed.contains(&protocol)
         {

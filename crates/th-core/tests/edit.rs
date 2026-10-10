@@ -136,6 +136,18 @@ fn an_added_server_imports_as_a_new_bundle_with_the_old_ones_kept() {
 }
 
 #[test]
+fn a_file_with_no_name_of_its_own_is_shown_under_its_id() {
+    let (_tmp, root, id) = installed();
+    let edit = Edit::Add(vec![new("  ", ".conf", WG_CONF)]);
+    let edited = bundle::import(&edit::rebuild(&root, &id, &edit).unwrap(), &root).unwrap();
+    let added = edited.manifest.profiles.last().unwrap();
+    assert_eq!(
+        (added.id.as_str(), added.name.as_str()),
+        ("server", "server")
+    );
+}
+
+#[test]
 fn the_same_edit_gives_the_same_bundle() {
     let (_tmp, root, id) = installed();
     let edit = Edit::Add(vec![new("Extra", "extra.conf", WG_CONF)]);
