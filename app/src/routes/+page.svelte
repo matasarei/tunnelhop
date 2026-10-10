@@ -29,6 +29,8 @@
   let dragging = $state(false);
   /** The installed bundles; null while the service cannot be asked. */
   let bundles = $state<BundleList | null>(null);
+  /** The service is there, but would not list its bundles. */
+  let listFailed = $state(false);
   /** A question waiting for a yes or a no. */
   let confirming = $state<{ title: string; message: string; action: string; run: () => void } | null>(null);
 
@@ -36,8 +38,12 @@
   async function refreshBundles() {
     try {
       bundles = await ipc.listBundles();
-    } catch {
+      listFailed = false;
+    } catch (e) {
       bundles = null;
+      // With the service away the window already says so; anything else is worth reading.
+      listFailed = report !== null;
+      if (listFailed) error = String(e);
     }
   }
 
@@ -299,6 +305,8 @@
   </div>
   {#if bundles && bundles.bundles.length > 0}
     <Bundles list={bundles} {busy} onswitch={askSwitch} ondelete={askDelete} />
+  {:else if listFailed}
+    <section class="card empty">The installed bundles could not be listed.</section>
   {:else if reachable}
     <section class="card empty">
       No bundle yet. Import a bundle <code>.zip</code> from your VPN provider, or drop it on this window.
