@@ -398,6 +398,9 @@ step (or per closely related pair), opened as a PR against `main`.
       the UI, connect to it, then remove it, with the leak capture running throughout.
 19. [ ] NSIS installer hooks (service install and uninstall, full cleanup) and
     `docs/TESTING.md` covering every acceptance criterion.
+    - Decide here: requests were added in steps 27 and 28 with `PROTOCOL_VERSION` still 1.
+      Either bump it whenever requests are added, or have the installer guarantee that the
+      app and the service are always replaced together.
     - Create: `app/src-tauri/windows/hooks.nsh`, `docs/TESTING.md`
     - Modify: `app/src-tauri/tauri.conf.json` (`bundle.windows.nsis.installerHooks`,
       `th-service.exe` as a resource)
