@@ -103,7 +103,9 @@ export function runtimeProblem(report: Report, protocol: Protocol): string | nul
   const runtime = report.runtimes.find((r) => r.protocol === protocol)?.availability;
   const name = runtimeName[protocol];
   if (!runtime || runtime.status === "missing") return `${name} is not installed`;
+  if (runtime.status === "too_old" && runtime.found === "unknown")
+    return `${name} could not be checked (${runtime.required} or newer is needed)`;
   if (runtime.status === "too_old")
-    return `${name} ${runtime.found} is too old (${runtime.required} or newer is needed)`;
+    return`${name} ${runtime.found} is too old (${runtime.required} or newer is needed)`;
   return null;
 }
