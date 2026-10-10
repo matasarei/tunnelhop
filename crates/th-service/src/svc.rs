@@ -383,6 +383,22 @@ pub fn install() -> Result<(), Box<dyn Error>> {
 /// (SPEC §6). Each part is attempted whatever the state of the others, so an uninstall after a
 /// crash, or a second uninstall, still leaves the machine clean.
 pub fn uninstall() -> Result<(), Box<dyn Error>> {
+    let service = remove_service();
+    if let Err(e) = &service {
+        log::error!("{SERVICE_NAME} could not be removed: {e}");
+    }
+    // Whatever the service managed: no filter of ours outlives an uninstall.
+    let block = WfpKillSwitch::disengage_now();
+    if let Err(e) = &block {
+        log::error!("the block could not be lifted: {e}");
+    }
+    let data = remove_data();
+    service?;
+    block?;
+    data
+}
+
+fn remove_service() -> Result<(), Box<dyn Error>> {
     let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
     let access = ServiceAccess::START
         | ServiceAccess::STOP
@@ -409,9 +425,10 @@ pub fn uninstall() -> Result<(), Box<dyn Error>> {
         }
         Err(e) => log::info!("{SERVICE_NAME} is not registered ({e})"),
     }
-    // Whatever the service managed: no filter of ours outlives an uninstall.
-    WfpKillSwitch::disengage_now()?;
+    Ok(())
+}
 
+fn remove_data() -> Result<(), Box<dyn Error>> {
     let layout = Layout::system()?;
     match std::fs::remove_dir_all(layout.root()) {
         Ok(()) => log::info!("removed {}", layout.root().display()),
