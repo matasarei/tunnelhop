@@ -1,0 +1,10 @@
+{
+  "build": {
+    "beforeBuildCommand": "npm run build && cargo build --release -p th-service"
+  },
+  "bundle": {
+    "resources": {
+      "../../target/release/th-service.exe": "th-service.exe"
+    }
+  }
+}

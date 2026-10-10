@@ -7,7 +7,6 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "beforeBundleCommand": "cargo build --release -p th-service",
     "frontendDist": "../build"
   },
   "app": {
@@ -29,9 +28,6 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "resources": {
-      "../../target/release/th-service.exe": "th-service.exe"
-    },
     "windows": {
       "nsis": {
         "installMode": "perMachine",

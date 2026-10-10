@@ -270,7 +270,9 @@ Restore-VMCheckpoint -VMName th-test -Name clean -Confirm:$false  # back to a fr
 cd app; npx tauri build --no-bundle; cd ..          # -> target\release\th-app.exe
 # The installer (app + service), for the installer pass in TESTING.md §3. The first build
 # downloads NSIS into %LOCALAPPDATA%\tauri.
-cd app; npx tauri build; cd ..    # -> target\release\bundle\nsis\TunnelHop_<version>_x64-setup.exe
+# It builds th-service.exe first; the service is listed as a resource only in
+# tauri.installer.conf.json, so that the app compiles before the service ever has.
+cd app; npm run installer; cd ..  # -> target\release\bundle\nsis\TunnelHop_<version>_x64-setup.exe
 ```
 
 - **Run it from `C:\Program Files\TunnelHop\`**, not from `C:\th`. `C:\th` is locked to

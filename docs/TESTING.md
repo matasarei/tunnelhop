@@ -21,12 +21,12 @@ the VM (`scripts\vm.ps1 test <name>`, DEVELOPMENT.md §5).
 ## 2. Building what gets tested
 
 ```powershell
-cd app; npx tauri build; cd ..
+cd app; npm run installer; cd ..
 # -> target\release\bundle\nsis\TunnelHop_<version>_x64-setup.exe
 ```
 
-The installer carries the app (`th-app.exe`) and the service (`th-service.exe`, built by
-`beforeBundleCommand` with default features, so without the dev safety timer). It installs per
+The installer carries the app (`th-app.exe`) and the service (`th-service.exe`, built first by
+the same command with default features, so without the dev safety timer). It installs per
 machine and asks for elevation; the app itself never runs elevated.
 
 ## 3. The installer pass (plan step 19)

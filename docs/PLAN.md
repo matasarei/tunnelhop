@@ -424,7 +424,8 @@ step (or per closely related pair), opened as a PR against `main`.
 19. [x] NSIS installer hooks (service install and uninstall, full cleanup) and
     `docs/TESTING.md` covering every acceptance criterion.
     - Landed: `app/src-tauri/windows/hooks.nsh`; `tauri.conf.json` (per-machine install,
-      `th-service.exe` as a resource, built by `beforeBundleCommand`); `svc::install` safe
+      `th-service.exe` as a resource in `tauri.installer.conf.json`, used by `npm run installer`,
+      so that the app still compiles before the service has been built); `svc::install` safe
       over an existing registration, `svc::uninstall` cleaning up whatever state it finds;
       `PROTOCOL_VERSION` 2; `docs/TESTING.md`; `leak-test.ps1 -Service`;
       `bundle-authfile.zip` in the lab.
