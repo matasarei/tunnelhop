@@ -5,6 +5,7 @@
 pub mod bundles;
 pub mod import;
 pub mod pipe_client;
+pub mod servers;
 pub mod tray;
 
 #[cfg(windows)]
@@ -26,6 +27,7 @@ mod app {
     use crate::import::{ImportOutcome, outcome, read_bundle};
 
     use crate::pipe_client::{Options, ServiceClient, Update};
+    use crate::servers::ChosenFile;
     use crate::tray::{Action, Tray};
 
     /// Passed by the autostart entry: start in the tray, without the window.
@@ -284,6 +286,76 @@ mod app {
         crate::bundles::list(client.request(Request::DeleteBundle { bundle_id }).await?)
     }
 
+    /// The config files to add as servers, each with the name it would show under: the files
+    /// dropped on the window, or ones chosen in the native picker when no paths are given.
+    /// Nothing is read yet. An empty list means the picker was closed.
+    #[tauri::command]
+    async fn choose_servers(
+        app: AppHandle,
+        paths: Option<Vec<String>>,
+    ) -> Result<Vec<ChosenFile>, String> {
+        let paths: Vec<std::path::PathBuf> = match paths {
+            Some(paths) => paths.into_iter().map(Into::into).collect(),
+            None => {
+                let mut dialog = app.dialog().file();
+                if let Some(window) = app.get_webview_window("main") {
+                    dialog = dialog.set_parent(&window);
+                }
+                dialog
+                    .set_title("Add servers")
+                    .add_filter("WireGuard and OpenVPN configs", &["conf", "ovpn"])
+                    .blocking_pick_files()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|file| file.into_path().ok())
+                    .collect()
+            }
+        };
+        paths
+            .iter()
+            .map(|path| crate::servers::describe(path))
+            .collect()
+    }
+
+    /// Add the chosen files to a bundle as servers. They are read here, as the signed-in
+    /// user; the bundle is replaced by a new one, as an import would make it.
+    #[tauri::command]
+    async fn add_servers(
+        app: AppHandle,
+        bundle_id: String,
+        files: Vec<ChosenFile>,
+    ) -> Result<ImportOutcome, String> {
+        let files = tauri::async_runtime::spawn_blocking(move || {
+            files
+                .iter()
+                .map(crate::servers::read)
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .await
+        .map_err(|e| format!("could not read the files: {e}"))??;
+        let client = app.state::<AppState>().client.clone();
+        outcome(
+            client
+                .request(Request::AddProfiles { bundle_id, files })
+                .await?,
+        )
+    }
+
+    /// Remove servers from a bundle; it is replaced the same way.
+    #[tauri::command]
+    async fn remove_servers(
+        app: AppHandle,
+        bundle_id: String,
+        profile_ids: Vec<String>,
+    ) -> Result<ImportOutcome, String> {
+        let client = app.state::<AppState>().client.clone();
+        let request = Request::RemoveProfiles {
+            bundle_id,
+            profile_ids,
+        };
+        outcome(client.request(request).await?)
+    }
+
     /// Store a username and password for a bundle's OpenVPN profiles: the listed ones, or every
     /// one as the bundle's default when the list is empty. The password is a `Secret` from the
     /// moment it is deserialized: never logged, wiped when dropped.
@@ -365,6 +437,9 @@ mod app {
                 select_bundle,
                 list_bundles,
                 delete_bundle,
+                choose_servers,
+                add_servers,
+                remove_servers,
                 set_credentials
             ])
             .setup(|app| {
