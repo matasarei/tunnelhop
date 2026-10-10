@@ -20,7 +20,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::driver::{
-    InterfaceId, ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelHandle, VpnDriver,
+    DriverError, InterfaceId, ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelHandle,
+    VpnDriver,
 };
 use crate::manifest::{Manifest, OnDisconnect, Protocol};
 
@@ -114,6 +115,7 @@ pub struct Rotator {
     connected_at: Option<Instant>,
     reconnecting_since: Option<Instant>,
     missing_credentials: HashSet<String>,
+    refused_credentials: HashSet<String>,
     entry_hosts: HashMap<String, HashSet<String>>,
     ip_changed: Option<bool>,
 }
@@ -145,6 +147,7 @@ impl Rotator {
             connected_at: None,
             reconnecting_since: None,
             missing_credentials: HashSet::new(),
+            refused_credentials: HashSet::new(),
             entry_hosts: HashMap::new(),
             ip_changed: None,
         }
@@ -188,6 +191,24 @@ impl Rotator {
     /// for rotation, and connecting to one by name is refused. Replaces the previous set.
     pub fn set_missing_credentials(&mut self, profile_ids: HashSet<String>) {
         self.missing_credentials = profile_ids;
+    }
+
+    /// Profiles whose server refused the stored username and password. Like the ones with
+    /// none, they are left alone until the user gives new ones: every further try would be
+    /// refused the same way, with traffic blocked meanwhile.
+    pub fn refused_credentials(&self) -> &HashSet<String> {
+        &self.refused_credentials
+    }
+
+    /// The user gave credentials: for `profile_ids`, or with none listed for the whole
+    /// bundle. Those profiles may be tried again.
+    pub fn credentials_changed(&mut self, profile_ids: &[String]) {
+        if profile_ids.is_empty() {
+            self.refused_credentials.clear();
+        }
+        for id in profile_ids {
+            self.refused_credentials.remove(id);
+        }
     }
 
     /// The server hosts each profile connects to, as written in its config (from import).
@@ -297,6 +318,11 @@ impl Rotator {
                 "profile \"{profile_id}\" needs credentials"
             )));
         }
+        if self.refused_credentials.contains(profile_id) {
+            return Err(RotationError::NoCandidates(format!(
+                "profile \"{profile_id}\" needs a new username and password: the server refused the saved ones"
+            )));
+        }
         if !self.usable_profiles().contains(&profile_id.to_string()) {
             return Err(RotationError::NoCandidates(format!(
                 "profile \"{profile_id}\" does not exist or its runtime is unavailable"
@@ -355,6 +381,7 @@ impl Rotator {
                 allowed.contains(&p.protocol)
                     && self.drivers.contains_key(&p.protocol)
                     && !self.missing_credentials.contains(&p.id)
+                    && !self.refused_credentials.contains(&p.id)
             })
             .map(|p| p.id.clone())
             .collect()
@@ -417,7 +444,15 @@ impl Rotator {
             let mut remaining: Vec<&String> =
                 candidates.iter().filter(|c| !failed.contains(*c)).collect();
             if remaining.is_empty() {
-                remaining = candidates.iter().collect();
+                // Everything was tried once: go round again, but not to a server that
+                // refused the sign-in, which it would refuse again.
+                remaining = candidates
+                    .iter()
+                    .filter(|c| !self.refused_credentials.contains(*c))
+                    .collect();
+            }
+            if remaining.is_empty() {
+                break;
             }
             let preferred: Vec<&String> = remaining
                 .iter()
@@ -558,10 +593,15 @@ impl Rotator {
             }
         }
 
-        let handle = driver
-            .connect(&profile)
-            .await
-            .map_err(|e| AttemptError::Retry(format!("could not connect: {e}")))?;
+        let handle = match driver.connect(&profile).await {
+            Ok(handle) => handle,
+            Err(e) => {
+                if e == DriverError::CredentialsRefused {
+                    self.refused_credentials.insert(profile_id.to_string());
+                }
+                return Err(AttemptError::Retry(format!("could not connect: {e}")));
+            }
+        };
 
         let verdict = match self.killswitch.allow_interface(handle.interface).await {
             Err(e) => Err(AttemptError::Retry(format!(

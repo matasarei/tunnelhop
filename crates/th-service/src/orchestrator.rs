@@ -392,6 +392,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
                 {
                     let missing = self.missing_credentials(&active.bundle);
                     active.rotator.set_missing_credentials(missing);
+                    active.rotator.credentials_changed(&profile_ids);
                 }
                 self.publish(&inner);
                 self.status()
@@ -899,7 +900,11 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
                         &active.bundle.id,
                         &active.bundle.manifest,
                         &active.bundle.needs_credentials,
-                        |p| self.credentials.has(&active.bundle.id, p),
+                        // Refused ones count as not there: the window then asks again.
+                        |p| {
+                            self.credentials.has(&active.bundle.id, p)
+                                && !active.rotator.refused_credentials().contains(p)
+                        },
                     )),
                     auto_rotate: active.rotator.auto_rotate(),
                     interval_minutes: (active.rotator.interval().as_secs() / 60) as u32,

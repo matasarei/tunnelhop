@@ -673,3 +673,67 @@ async fn a_failed_teardown_does_not_keep_the_previous_ip_verdict() {
         "Blocked must not report the last rotation's result"
     );
 }
+
+// ---- A server that refuses the sign-in ------------------------------------------------------
+
+#[tokio::test]
+async fn a_server_that_refuses_the_sign_in_is_tried_once_and_then_left_alone() {
+    let mut rig = Rig::new(manifest(&["wg-a", "ovpn-b"], "reconnect_random"));
+    rig.driver.refuse_credentials("ovpn-b", true);
+
+    // Asked for by name: one try, not MAX_ATTEMPTS of the same refusal.
+    let error = rig.rotator.connect_to("ovpn-b", rig.now).await.unwrap_err();
+    let RotationError::Exhausted(failures) = &error else {
+        panic!("{error:?}");
+    };
+    assert_eq!(failures.len(), 1, "{failures:?}");
+    assert!(
+        failures[0].contains("refused the username and password"),
+        "{failures:?}"
+    );
+    assert_eq!(connects(&rig.log.take()), ["connect:ovpn-b"]);
+    assert!(rig.rotator.refused_credentials().contains("ovpn-b"));
+    assert_eq!(rig.rotator.status().state, State::Blocked);
+
+    // Asking again does not reach the server at all.
+    let error = rig.rotator.connect_to("ovpn-b", rig.now).await.unwrap_err();
+    assert!(
+        matches!(&error, RotationError::NoCandidates(why) if why.contains("refused the saved ones")),
+        "{error:?}"
+    );
+    assert!(connects(&rig.log.take()).is_empty());
+
+    // Rotation never picks it either.
+    for _ in 0..10 {
+        let status = rig.rotate().await.unwrap();
+        assert_eq!(status.profile_id.as_deref(), Some("wg-a"));
+    }
+    assert!(!rig.log.take().iter().any(|e| e.contains("ovpn-b")));
+
+    // New credentials make it a candidate again.
+    rig.driver.refuse_credentials("ovpn-b", false);
+    rig.rotator.credentials_changed(&["ovpn-b".to_string()]);
+    assert!(rig.rotator.refused_credentials().is_empty());
+    let status = rig.rotator.connect_to("ovpn-b", rig.now).await.unwrap();
+    assert_eq!(status.profile_id.as_deref(), Some("ovpn-b"));
+}
+
+#[tokio::test]
+async fn a_rotation_moves_past_a_server_that_refuses_the_sign_in() {
+    let mut rig = Rig::new(manifest(&["ovpn-a", "ovpn-b"], "reconnect_random"));
+    rig.driver.refuse_credentials("ovpn-a", true);
+    rig.driver.refuse_credentials("ovpn-b", true);
+
+    // Both refuse: each is tried once and the rotation ends, with nothing tried twice.
+    let error = rig.rotate().await.unwrap_err();
+    assert!(matches!(error, RotationError::Exhausted(_)), "{error:?}");
+    let mut tried = connects(&rig.log.take());
+    tried.sort();
+    assert_eq!(tried, ["connect:ovpn-a", "connect:ovpn-b"]);
+
+    // Credentials for the whole bundle clear both.
+    rig.driver.refuse_credentials("ovpn-a", false);
+    rig.driver.refuse_credentials("ovpn-b", false);
+    rig.rotator.credentials_changed(&[]);
+    assert!(rig.rotate().await.is_ok());
+}

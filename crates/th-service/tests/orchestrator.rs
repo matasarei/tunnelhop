@@ -1391,3 +1391,46 @@ async fn a_tunnel_lost_on_a_runtime_found_later_is_replaced() {
     assert_eq!(lab.orchestrator.report().state, State::Connected);
     watch.abort();
 }
+
+#[tokio::test]
+async fn a_refused_sign_in_is_reported_as_missing_until_it_is_given_again() {
+    let log = CallLog::default();
+    let driver = Arc::new(MockDriver::new(log.clone()));
+    let drivers: HashMap<Protocol, Arc<dyn VpnDriver>> = HashMap::from([
+        (Protocol::Wireguard, driver.clone() as Arc<dyn VpnDriver>),
+        (Protocol::Openvpn, driver.clone() as Arc<dyn VpnDriver>),
+    ]);
+    let dir = tempfile::tempdir().unwrap();
+    let lab = lab_from(dir, false, log, Vec::new(), drivers, None).await;
+    let bundle_id = imported_and_selected(&lab).await;
+    let sign_in = |password: &str| Request::SetCredentials {
+        bundle_id: bundle_id.clone(),
+        profile_ids: Vec::new(),
+        username: "user".into(),
+        password: Secret::new(password),
+    };
+    let connect = || Request::Connect {
+        profile_id: Some("ovpn".into()),
+    };
+    let has_sign_in = |status: StatusReport| status.bundle.unwrap().profiles[2].has_credentials;
+
+    assert!(has_sign_in(report(
+        lab.orchestrator.handle(sign_in("wrong")).await
+    )));
+    driver.refuse_credentials("ovpn", true);
+    let response = lab.orchestrator.handle(connect()).await;
+    assert!(
+        is_error(&response, "refused the username and password"),
+        "{response:?}"
+    );
+    // The saved sign-in is still on disk, but the window is told the server needs one.
+    assert!(!has_sign_in(lab.orchestrator.report()));
+
+    driver.refuse_credentials("ovpn", false);
+    assert!(has_sign_in(report(
+        lab.orchestrator.handle(sign_in("right")).await
+    )));
+    let status = report(lab.orchestrator.handle(connect()).await);
+    assert_eq!(status.state, State::Connected);
+    assert_eq!(status.profile_id.as_deref(), Some("ovpn"));
+}
