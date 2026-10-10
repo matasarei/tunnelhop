@@ -8,13 +8,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use th_core::driver::{TunnelEvent, VpnDriver};
-use th_core::ipc::{self, Event, ProfileFile, Request, Response, Secret, StatusReport};
+use th_core::ipc::{
+    self, Availability, Event, ProfileFile, Request, Response, RuntimeInfo, Secret, StatusReport,
+};
 use th_core::manifest::Protocol;
 use th_core::rotation::State;
 use th_core::testing::{CallLog, FakeKillSwitch, FakeProbe, MockDriver};
 use th_core::tunnel_name::tunnel_name;
 use th_service::credentials::{CredentialStore, Vault};
-use th_service::orchestrator::{Orchestrator, Parts};
+use th_service::orchestrator::{Discover, Orchestrator, Parts};
 use th_service::store::{Layout, Settings};
 use zeroize::Zeroizing;
 use zip::write::SimpleFileOptions;
@@ -89,17 +91,30 @@ async fn lab_with(
     log: CallLog,
     driver: Arc<dyn VpnDriver>,
 ) -> Lab {
+    let drivers: HashMap<Protocol, Arc<dyn VpnDriver>> =
+        HashMap::from([(Protocol::Wireguard, driver)]);
+    lab_from(dir, killswitch_engaged, log, Vec::new(), drivers, None).await
+}
+
+/// A lab with exactly these runtimes and drivers, and this way of looking for runtimes again.
+async fn lab_from(
+    dir: tempfile::TempDir,
+    killswitch_engaged: bool,
+    log: CallLog,
+    runtimes: Vec<RuntimeInfo>,
+    drivers: HashMap<Protocol, Arc<dyn VpnDriver>>,
+    discover: Option<Discover>,
+) -> Lab {
     let layout = Layout::new(dir.path());
     std::fs::create_dir_all(layout.bundles()).unwrap();
     std::fs::create_dir_all(layout.credentials()).unwrap();
-    let drivers: HashMap<Protocol, Arc<dyn VpnDriver>> =
-        HashMap::from([(Protocol::Wireguard, driver)]);
     let orchestrator = Orchestrator::start(Parts {
         layout: layout.clone(),
         settings: Settings::load(&layout.settings_file()).unwrap(),
         credentials: CredentialStore::new(layout.credentials(), XorVault),
-        runtimes: Vec::new(),
+        runtimes,
         drivers,
+        discover,
         killswitch: Arc::new(FakeKillSwitch::new(log.clone())),
         killswitch_engaged,
         probe: Arc::new(FakeProbe::new(log.clone(), Ipv4Addr::new(203, 0, 113, 1))),
@@ -1227,4 +1242,152 @@ async fn a_new_bundle_does_not_lift_a_block_left_by_a_crash() {
     let (bundles, in_use) = listed(lab.orchestrator.handle(Request::ListBundles).await);
     assert_eq!(bundles, [("My servers".to_string(), id)]);
     assert_eq!(in_use, None);
+}
+
+#[tokio::test]
+async fn a_runtime_installed_after_the_start_is_noticed_and_used() {
+    let log = CallLog::default();
+    let missing = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Missing,
+    };
+    let available = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Available {
+            version: "1.1.1".into(),
+        },
+    };
+    // WireGuard is not there at first; `installed` is flipped when the user installs it.
+    let installed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let looks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let discover: Discover = {
+        let (installed, looks, log) = (installed.clone(), looks.clone(), log.clone());
+        let (missing, available) = (missing.clone(), available.clone());
+        Arc::new(move |protocol| {
+            assert_eq!(
+                protocol,
+                Protocol::Wireguard,
+                "only what is missing is looked for"
+            );
+            looks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if installed.load(std::sync::atomic::Ordering::SeqCst) {
+                let driver: Arc<dyn VpnDriver> = Arc::new(MockDriver::new(log.clone()));
+                (available.clone(), Some(driver))
+            } else {
+                (missing.clone(), None)
+            }
+        })
+    };
+    let lab = lab_from(
+        tempfile::tempdir().unwrap(),
+        false,
+        log,
+        vec![missing.clone()],
+        HashMap::new(),
+        Some(discover),
+    )
+    .await;
+    imported_and_selected(&lab).await;
+    let start = Instant::now();
+
+    // Not installed: reported as missing, and nothing can connect.
+    lab.orchestrator.tick(start).await;
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.runtimes, [missing]);
+    let response = lab
+        .orchestrator
+        .handle(Request::Connect { profile_id: None })
+        .await;
+    assert!(matches!(response, Response::Error { .. }), "{response:?}");
+
+    // Installed now. The next look is a few seconds away, not on every tick.
+    installed.store(true, std::sync::atomic::Ordering::SeqCst);
+    lab.orchestrator.tick(start + Duration::from_secs(1)).await;
+    assert_eq!(looks.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let mut events = lab.orchestrator.events().subscribe();
+    lab.orchestrator.tick(start + Duration::from_secs(11)).await;
+
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.runtimes, std::slice::from_ref(&available));
+    assert!(
+        matches!(events.try_recv(), Ok(Event::Status { report }) if report.runtimes == std::slice::from_ref(&available)),
+        "the window is told"
+    );
+    assert_eq!(connect(&lab, "wg-a").await.state, State::Connected);
+
+    // Found: no more looking.
+    lab.orchestrator.tick(start + Duration::from_secs(60)).await;
+    assert_eq!(looks.load(std::sync::atomic::Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_tunnel_lost_on_a_runtime_found_later_is_replaced() {
+    let log = CallLog::default();
+    let missing = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Missing,
+    };
+    let available = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Available {
+            version: "1.1.1".into(),
+        },
+    };
+    // The driver the look hands over; kept here to make it report a lost tunnel.
+    let late = Arc::new(MockDriver::new(log.clone()));
+    let discover: Discover = {
+        let (late, available) = (late.clone(), available.clone());
+        Arc::new(move |_| (available.clone(), Some(late.clone() as Arc<dyn VpnDriver>)))
+    };
+    let lab = lab_from(
+        tempfile::tempdir().unwrap(),
+        false,
+        log,
+        vec![missing],
+        HashMap::new(),
+        Some(discover),
+    )
+    .await;
+    let bundle_id = imported_and_selected(&lab).await;
+
+    // The watch runs as in the service: its first tick finds the runtime.
+    let watch = lab.orchestrator.spawn_watch();
+    let until = |what: &'static str, done: Box<dyn Fn() -> bool>| async move {
+        for _ in 0..300 {
+            if done() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting until {what}");
+    };
+    let orchestrator = lab.orchestrator.clone();
+    until(
+        "the runtime is found",
+        Box::new(move || orchestrator.report().runtimes == std::slice::from_ref(&available)),
+    )
+    .await;
+    assert_eq!(connect(&lab, "wg-a").await.state, State::Connected);
+    lab.log.take();
+
+    let id = th_core::bundle::BundleId::parse(&bundle_id).unwrap();
+    late.emit(TunnelEvent::Down {
+        tunnel: tunnel_name(&id, "wg-a"),
+        reason: "test".into(),
+    });
+
+    let seen = lab.log.clone();
+    let reconnects = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = reconnects.clone();
+    until(
+        "the lost tunnel is replaced",
+        Box::new(move || {
+            let mut kept = kept.lock().unwrap();
+            kept.extend(seen.take());
+            kept.iter().any(|e: &String| e.starts_with("connect:"))
+        }),
+    )
+    .await;
+    assert_eq!(lab.orchestrator.report().state, State::Connected);
+    watch.abort();
 }

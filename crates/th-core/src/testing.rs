@@ -53,6 +53,11 @@ impl MockDriver {
         }
     }
 
+    /// Send an event to whoever follows this driver, as a real one does when a tunnel drops.
+    pub fn emit(&self, event: TunnelEvent) {
+        let _ = self.events.send(event);
+    }
+
     pub fn fail_connect(&self, profile_id: &str) {
         self.fail_connect
             .lock()

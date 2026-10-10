@@ -19,7 +19,9 @@ use rand::rngs::StdRng;
 use th_core::bundle::{self, BundleId, ImportedBundle, MAX_BUNDLES};
 use th_core::driver::{ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelHandle, VpnDriver};
 use th_core::edit::{self, Edit, NewProfile};
-use th_core::ipc::{self, BundleInfo, Event, Request, Response, RuntimeInfo, StatusReport};
+use th_core::ipc::{
+    self, Availability, BundleInfo, Event, Request, Response, RuntimeInfo, StatusReport,
+};
 use th_core::manifest::Protocol;
 use th_core::rotation::{KillSwitch, Overrides, Probe, Resolver, Rotator, State, Status, Trigger};
 use th_core::sanitize::Endpoint;
@@ -33,6 +35,13 @@ use crate::store::{Layout, Settings};
 const DEFAULT_INTERVAL_MINUTES: u32 = 60;
 /// How often the timer and the reconnect grace are checked.
 const TICK: Duration = Duration::from_secs(1);
+/// How often a runtime that is missing or too old is looked for again.
+const LOOK_AGAIN: Duration = Duration::from_secs(10);
+
+/// Look for one protocol's runtime again: what to report, and its driver when it can be used.
+/// It may block (reading OpenVPN's version runs it).
+pub type Discover =
+    Arc<dyn Fn(Protocol) -> (RuntimeInfo, Option<Arc<dyn VpnDriver>>) + Send + Sync>;
 
 /// Everything the orchestrator is built from.
 pub struct Parts<V> {
@@ -42,6 +51,9 @@ pub struct Parts<V> {
     pub runtimes: Vec<RuntimeInfo>,
     /// Only the protocols whose runtime is installed and new enough.
     pub drivers: HashMap<Protocol, Arc<dyn VpnDriver>>,
+    /// How a runtime that was not usable at start is looked for again, so that one installed
+    /// later is picked up without a restart. `None` never looks.
+    pub discover: Option<Discover>,
     pub killswitch: Arc<dyn KillSwitch>,
     /// Whether our block was found in place at start (a crash left it).
     pub killswitch_engaged: bool,
@@ -53,8 +65,14 @@ pub struct Parts<V> {
 pub struct Orchestrator<V> {
     layout: Layout,
     credentials: CredentialStore<V>,
-    runtimes: Vec<RuntimeInfo>,
-    drivers: HashMap<Protocol, Arc<dyn VpnDriver>>,
+    /// Both change when a runtime installed later is found.
+    runtimes: StdMutex<Vec<RuntimeInfo>>,
+    drivers: StdMutex<HashMap<Protocol, Arc<dyn VpnDriver>>>,
+    discover: Option<Discover>,
+    /// When the runtimes were last looked for.
+    looked: StdMutex<Option<Instant>>,
+    /// Where the drivers' events go once `spawn_watch` runs, for a driver that arrives later.
+    forward: StdMutex<Option<mpsc::Sender<TunnelEvent>>>,
     killswitch: Arc<dyn KillSwitch>,
     probe: Arc<dyn Probe>,
     seed: Option<u64>,
@@ -84,8 +102,11 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         let orchestrator = Arc::new(Orchestrator {
             layout: parts.layout,
             credentials: parts.credentials,
-            runtimes: parts.runtimes,
-            drivers: parts.drivers,
+            runtimes: StdMutex::new(parts.runtimes),
+            drivers: StdMutex::new(parts.drivers),
+            discover: parts.discover,
+            looked: StdMutex::new(None),
+            forward: StdMutex::new(None),
             killswitch: parts.killswitch,
             probe: parts.probe,
             seed: parts.seed,
@@ -147,23 +168,10 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
     /// task is aborted.
     pub fn spawn_watch(self: &Arc<Self>) -> tokio::task::JoinHandle<()> {
         let (forward, mut events) = mpsc::channel::<TunnelEvent>(64);
-        for driver in self.drivers.values() {
-            let mut source = driver.events();
-            let forward = forward.clone();
-            tokio::spawn(async move {
-                loop {
-                    match source.recv().await {
-                        Ok(event) => {
-                            if forward.send(event).await.is_err() {
-                                return;
-                            }
-                        }
-                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                        Err(broadcast::error::RecvError::Closed) => return,
-                    }
-                }
-            });
+        for driver in self.drivers() {
+            forward_events(driver.as_ref(), forward.clone());
         }
+        *lock(&self.forward) = Some(forward);
         let this = self.clone();
         tokio::spawn(async move {
             let mut ticks = tokio::time::interval(TICK);
@@ -178,6 +186,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
 
     /// Rotate when the interval is due, or when a tunnel has been reconnecting past its grace.
     pub async fn tick(&self, now: Instant) {
+        self.look_for_runtimes(now).await;
         let mut inner = self.inner.lock().await;
         let Some(active) = inner.active.as_mut() else {
             return;
@@ -190,6 +199,73 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         if let Some(trigger) = trigger {
             self.rotate(&mut inner, trigger, now).await;
         }
+    }
+
+    /// Look again for the runtimes that could not be used, every `LOOK_AGAIN`: one installed
+    /// or updated since is reported, and its driver joins the others.
+    async fn look_for_runtimes(&self, now: Instant) {
+        let Some(discover) = self.discover.clone() else {
+            return;
+        };
+        let unusable: Vec<Protocol> = lock(&self.runtimes)
+            .iter()
+            .filter(|r| !matches!(r.availability, Availability::Available { .. }))
+            .map(|r| r.protocol)
+            .collect();
+        if unusable.is_empty() {
+            return;
+        }
+        {
+            let mut looked = lock(&self.looked);
+            if looked.is_some_and(|last| now.saturating_duration_since(last) < LOOK_AGAIN) {
+                return;
+            }
+            *looked = Some(now);
+        }
+        // Off the async threads, and before `inner` is taken: requests are not held up.
+        let found = tokio::task::spawn_blocking(move || {
+            unusable
+                .into_iter()
+                .map(|p| discover(p))
+                .collect::<Vec<_>>()
+        })
+        .await
+        .unwrap_or_default();
+
+        let mut changed = false;
+        let mut arrived = Vec::new();
+        for (info, driver) in found {
+            if let Some(known) = lock(&self.runtimes)
+                .iter_mut()
+                .find(|r| r.protocol == info.protocol)
+                && *known != info
+            {
+                log::info!("{:?} runtime is now {:?}", info.protocol, info.availability);
+                *known = info.clone();
+                changed = true;
+            }
+            if let Some(driver) = driver {
+                lock(&self.drivers).insert(info.protocol, driver.clone());
+                if let Some(forward) = lock(&self.forward).clone() {
+                    forward_events(driver.as_ref(), forward);
+                }
+                arrived.push((info.protocol, driver));
+            }
+        }
+        if !changed {
+            return;
+        }
+        let mut inner = self.inner.lock().await;
+        if let Some(active) = inner.active.as_mut() {
+            for (protocol, driver) in arrived {
+                active.rotator.add_driver(protocol, driver);
+            }
+        }
+        self.publish(&inner);
+    }
+
+    fn drivers(&self) -> Vec<Arc<dyn VpnDriver>> {
+        lock(&self.drivers).values().cloned().collect()
     }
 
     pub async fn on_tunnel_event(&self, event: &TunnelEvent, now: Instant) {
@@ -748,7 +824,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         let mut rotator = Rotator::new(
             bundle.manifest.clone(),
             overrides(settings),
-            self.drivers.clone(),
+            lock(&self.drivers).clone(),
             self.killswitch.clone(),
             self.probe.clone(),
             Arc::new(BundleResolver::new(bundle)),
@@ -782,7 +858,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             })
             .unwrap_or_default();
         let mut adopted = None;
-        for driver in self.drivers.values() {
+        for driver in self.drivers() {
             let leftovers = match driver.reconcile().await {
                 Ok(leftovers) => leftovers,
                 Err(e) => {
@@ -827,7 +903,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
                     )),
                     auto_rotate: active.rotator.auto_rotate(),
                     interval_minutes: (active.rotator.interval().as_secs() / 60) as u32,
-                    runtimes: self.runtimes.clone(),
+                    runtimes: lock(&self.runtimes).clone(),
                 }
             }
             None => StatusReport {
@@ -842,7 +918,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
                     .settings
                     .interval_minutes
                     .unwrap_or(DEFAULT_INTERVAL_MINUTES),
-                ..empty_report(self.runtimes.clone())
+                ..empty_report(lock(&self.runtimes).clone())
             },
         };
         *self.report.lock().unwrap_or_else(|e| e.into_inner()) = report.clone();
@@ -855,6 +931,29 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             message: message.to_string(),
         });
     }
+}
+
+/// A poisoned lock still holds what the service needs: carry on with it.
+fn lock<T>(mutex: &StdMutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Pass a driver's tunnel events on to the watch task, for as long as both live.
+fn forward_events(driver: &dyn VpnDriver, forward: mpsc::Sender<TunnelEvent>) {
+    let mut source = driver.events();
+    tokio::spawn(async move {
+        loop {
+            match source.recv().await {
+                Ok(event) => {
+                    if forward.send(event).await.is_err() {
+                        return;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => return,
+            }
+        }
+    });
 }
 
 fn import_failed(errors: &[bundle::ImportError]) -> Response {

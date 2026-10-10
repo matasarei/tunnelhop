@@ -525,6 +525,18 @@ step (or per closely related pair), opened as a PR against `main`.
       files.
     - Open: whether a second bundle can be made from files while one is in use (today's
       answer in the window: no, they are added to it).
+30. [x] A runtime installed after the service started is noticed. On the PC, WireGuard was
+    installed a minute after the service started and stayed "not installed" until a restart.
+    - Landed: `Parts::discover` and `Orchestrator::look_for_runtimes`
+      (`crates/th-service/src/orchestrator.rs`); `runtimes::discover_one`; `svc::driver_for`;
+      `Rotator::add_driver`.
+    - Ruling: the look runs on the one-second tick, every 10 s, only for runtimes that are
+      missing or too old; nothing runs once both are usable.
+    - Ruling: only "not usable → usable" is followed. A runtime removed while the service
+      runs is still reported as available and fails at connect.
+    - Checked in `th-test` (2026-10-10): the service started with WireGuard's folder moved
+      aside (`missing`, connect refused); 8 s after the folder was back the status said
+      `available`, and connect and rotate worked.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
