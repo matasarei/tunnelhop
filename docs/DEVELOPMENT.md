@@ -327,6 +327,12 @@ gets wrong:
 - **The VPN permit names ports, not the whole address**: 192.168.77.1 is also the VM's gateway,
   so anything else sent to it is a leak.
 
+**Watching instead of rotating:** `scripts\leak-test.ps1 -Watch 180` captures for three minutes
+without rotating, for checking something done by hand or through `ctl` meanwhile (editing a
+bundle's servers, step 28). Connect first: it refuses to start without a tunnel, samples the
+service's state every two seconds, and reports any sample with the kill-switch off. It leaves
+the tunnel as it finds it.
+
 ## Safety rules
 
 - **Kill-switch and live tests run only in `th-test`.** Not on the PC, not "just once".

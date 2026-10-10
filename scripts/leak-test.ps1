@@ -16,10 +16,18 @@
 .EXAMPLE
     scripts\leak-test.ps1                 # 20 rotations
     scripts\leak-test.ps1 -Rotations 5
+    scripts\leak-test.ps1 -Watch 180      # capture for 3 minutes while you use the app or ctl
+
+.NOTES
+    -Watch does no rotating of its own: it expects a tunnel already up, samples the service's
+    state every two seconds, and leaves the tunnel as it finds it. Use it to check that
+    something done by hand (editing a bundle's servers, say) never opens a gap.
 #>
 [CmdletBinding()]
 param(
     [int]$Rotations = 20,
+    # Seconds to capture without rotating; 0 runs the rotations instead.
+    [int]$Watch = 0,
     # UDP ports of the VPN servers on 192.168.77.1 (test-infra: wg-a, wg-b, ovpn).
     [int[]]$VpnPorts = @(41820, 41821, 1194),
     [string]$VM = 'th-test'
@@ -29,8 +37,8 @@ $ErrorActionPreference = 'Stop'
 $credential = Import-Clixml (Join-Path $env:USERPROFILE '.tunnelhop\th-test.cred')
 $session = New-PSSession -VMName $VM -Credential $credential
 try {
-    $result = Invoke-Command -Session $session -ArgumentList $Rotations {
-        param($count)
+    $result = Invoke-Command -Session $session -ArgumentList $Rotations, $Watch {
+        param($count, $watch)
         function Ctl {
             $text = & C:\th\th-service.exe ctl @args 2>$null | Out-String
             [pscustomobject]@{ Code = $LASTEXITCODE; Json = $(try { $text | ConvertFrom-Json } catch { $null }); Text = $text.Trim() }
@@ -39,22 +47,43 @@ try {
             Where-Object { $_.Group -eq 'Microsoft NetVsc Nic' } | Select-Object -First 1
         $ids = @($group.Components.Id)
         if (-not $ids) { throw 'the physical adapter (Microsoft NetVsc Nic) was not found' }
-        $connect = Ctl connect
-        if ($connect.Code) { throw "connect failed: $($connect.Text)" }
+        if ($watch -gt 0) {
+            if ((Ctl status).Json.report.state -ne 'connected') {
+                throw 'connect first: a watch expects a tunnel up from its first second'
+            }
+        } else {
+            $connect = Ctl connect
+            if ($connect.Code) { throw "connect failed: $($connect.Text)" }
+        }
         foreach ($f in 'C:\th\leak.etl', 'C:\th\leak.pcapng') { if (Test-Path $f) { [IO.File]::Delete($f) } }
         pktmon start --capture --comp ($ids -join ',') --pkt-size 0 --file-name C:\th\leak.etl | Out-Null
-        $ips = foreach ($i in 1..$count) {
-            $r = Ctl rotate
-            if ($r.Code) { "failed: $($r.Text)" } else { $r.Json.report.public_ip }
+        $states = @()
+        $unblocked = 0
+        if ($watch -gt 0) {
+            $ips = @()
+            $until = (Get-Date).AddSeconds($watch)
+            while ((Get-Date) -lt $until) {
+                $report = (Ctl status).Json.report
+                $states += [string]$report.state
+                if (-not $report.killswitch_engaged) { $unblocked++ }
+                Start-Sleep -Seconds 2
+            }
+        } else {
+            $ips = foreach ($i in 1..$count) {
+                $r = Ctl rotate
+                if ($r.Code) { "failed: $($r.Text)" } else { $r.Json.report.public_ip }
+            }
         }
         pktmon stop | Out-Null
         pktmon etl2pcap C:\th\leak.etl --out C:\th\leak.pcapng | Out-Null
-        $null = Ctl disconnect
+        if ($watch -eq 0) { $null = Ctl disconnect }
         # Who "the VM" is on the wire, read here rather than assumed: a rebuilt VM has a new MAC.
         $adapter = Get-NetAdapter -Physical | Where-Object Status -eq 'Up' | Select-Object -First 1
         $address = (Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4).IPAddress
         [pscustomobject]@{
             Ips = $ips
+            States = $states
+            Unblocked = $unblocked
             Mac = $adapter.MacAddress.Replace('-', ':').ToLower()
             Address = $address
         }
@@ -66,7 +95,12 @@ try {
     Remove-PSSession $session
 }
 
-"$Rotations rotations; public IPs: " + (($result.Ips | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+if ($Watch -gt 0) {
+    "watched $Watch s; states seen: " + (($result.States | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+    "samples with the kill-switch off: $($result.Unblocked)   <- must be 0"
+} else {
+    "$Rotations rotations; public IPs: " + (($result.Ips | Group-Object | ForEach-Object { "$($_.Name) x$($_.Count)" }) -join ', ')
+}
 if ($result.Mac -notmatch '^([0-9a-f]{2}:){5}[0-9a-f]{2}$') { throw "unexpected MAC from the VM: $($result.Mac)" }
 "the VM on the wire: $($result.Mac), $($result.Address)"
 
