@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use th_core::edit::{MAX_CONFIG_BYTES, protocol_of};
 use th_core::ipc::ProfileFile;
 
+use crate::lang::text;
+
 /// A config file the user chose, with the name its server will show under.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChosenFile {
@@ -20,12 +22,7 @@ fn file_name(path: &Path) -> Result<&str, String> {
     path.file_name()
         .and_then(|name| name.to_str())
         .filter(|name| protocol_of(name).is_some())
-        .ok_or_else(|| {
-            format!(
-                "{} cannot be added: servers come from .conf (WireGuard) and .ovpn (OpenVPN) files",
-                path.display()
-            )
-        })
+        .ok_or_else(|| text("file.not_config", &[("name", &path.display().to_string())]))
 }
 
 /// The file as the page offers it: its path, and its name without the extension as the
@@ -45,21 +42,22 @@ pub fn describe(path: &Path) -> Result<ChosenFile, String> {
 pub fn read(chosen: &ChosenFile) -> Result<ProfileFile, String> {
     let path = Path::new(&chosen.path);
     let file_name = file_name(path)?;
-    let shown = path.display();
-    let metadata = std::fs::metadata(path).map_err(|e| format!("cannot open {shown}: {e}"))?;
+    let shown = path.display().to_string();
+    let named = [("name", shown.as_str())];
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| text("file.cannot_open", &[named[0], ("reason", &e.to_string())]))?;
     if !metadata.is_file() {
-        return Err(format!("{shown} is not a file"));
+        return Err(text("file.not_file", &named));
     }
     // Checked on the length alone, so an oversized file is never read into memory.
     if metadata.len() > MAX_CONFIG_BYTES as u64 {
-        return Err(format!(
-            "{shown} is larger than 1 MB, the most a config may be"
-        ));
+        return Err(text("file.config_too_large", &named));
     }
     if metadata.len() == 0 {
-        return Err(format!("{shown} is empty"));
+        return Err(text("file.empty", &named));
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("cannot read {shown}: {e}"))?;
+    let bytes = std::fs::read(path)
+        .map_err(|e| text("file.cannot_read", &[named[0], ("reason", &e.to_string())]))?;
     Ok(ProfileFile::new(chosen.name.trim(), file_name, &bytes))
 }
 

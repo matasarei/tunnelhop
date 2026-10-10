@@ -2,6 +2,7 @@
   // Why a server is unavailable: its protocol's program is missing or too old on this PC, which
   // one TunnelHop needs, and where it comes from. The app opens no links itself, so the address
   // is shown to copy.
+  import { sentences, t, type Key } from "$lib/i18n";
   import { protocolName, runtimeName, type Availability, type Protocol } from "$lib/ipc";
 
   let {
@@ -15,15 +16,9 @@
     onclose: () => void;
   } = $props();
 
-  const sources: Record<Protocol, { address: string; pick: string }> = {
-    wireguard: {
-      address: "https://www.wireguard.com/install/",
-      pick: "Choose the Windows installer.",
-    },
-    openvpn: {
-      address: "https://openvpn.net/community-downloads/",
-      pick: "Choose the Windows 64-bit MSI installer; its file name starts with OpenVPN-2.",
-    },
+  const sources: Record<Protocol, { address: string; pick: Key }> = {
+    wireguard: { address: "https://www.wireguard.com/install/", pick: "help.pick.wireguard" },
+    openvpn: { address: "https://openvpn.net/community-downloads/", pick: "help.pick.openvpn" },
   };
 
   let dialog: (HTMLElement & { show(): void; hide(): void }) | undefined = $state();
@@ -38,10 +33,11 @@
   const source = $derived(sources[protocol]);
   const title = $derived(
     availability.status === "too_old"
-      ? availability.found === "unknown"
-        ? `${name} could not be checked`
-        : `${name} ${availability.found} is too old`
-      : `${name} is not installed`,
+      ? t(availability.found === "unknown" ? "help.title.unchecked" : "help.title.too_old", {
+          name,
+          found: availability.found,
+        })
+      : t("runtime.missing", { name }),
   );
 
   async function copy() {
@@ -71,39 +67,32 @@
     <div class="text">
       {#if availability.status === "too_old"}
         <p>
-          {#if availability.found === "unknown"}
-            {name} is installed, but its version could not be read.
-          {:else}
-            {name} {availability.found} is installed.
-          {/if}
-          TunnelHop needs {availability.required} or newer for {protocolName[protocol]} servers. Install the
-          current release over it.
+          {sentences(
+            t(availability.found === "unknown" ? "help.unreadable" : "help.installed", {
+              name,
+              found: availability.found,
+            }),
+            t("help.needs", { required: availability.required, protocol: protocolName[protocol] }),
+          )}
         </p>
       {:else}
-        <p>
-          TunnelHop starts and controls {protocolName[protocol]} tunnels itself, and for that it needs
-          {name} installed on this PC. It was not found.
-        </p>
+        <p>{t("help.missing", { protocol: protocolName[protocol], name })}</p>
       {/if}
       {#if protocol === "openvpn" && availability.status === "missing"}
         <p>
-          <strong>OpenVPN Connect is a different program and cannot be used.</strong> It is what openvpn.net
-          and the Microsoft Store offer first. TunnelHop needs the Community edition (version 2.x), which can
-          be installed next to it.
+          <strong>{t("help.connect.strong")}</strong>
+          {t("help.connect.rest")}
         </p>
       {/if}
-      <p>Download it from:</p>
+      <p>{t("help.download")}</p>
       <div class="source">
         <code>{source.address}</code>
-        <fluent-button size="small" onclick={copy}>{copied ? "Copied" : "Copy link"}</fluent-button>
+        <fluent-button size="small" onclick={copy}>{copied ? t("help.copied") : t("help.copy")}</fluent-button>
       </div>
-      <p>{source.pick} Keep the default options.</p>
-      <p class="hint">
-        TunnelHop notices the new program a few seconds after its installer finishes; this message then
-        closes by itself.
-      </p>
+      <p>{sentences(t(source.pick), t("help.defaults"))}</p>
+      <p class="hint">{t("help.closes")}</p>
     </div>
-    <fluent-button slot="action" appearance="primary" onclick={close}>Close</fluent-button>
+    <fluent-button slot="action" appearance="primary" onclick={close}>{t("action.close")}</fluent-button>
   </fluent-dialog-body>
 </fluent-dialog>
 

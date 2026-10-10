@@ -335,6 +335,14 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
 ## 5. UI
 
 - **Window:** closing it hides it to the tray.
+- **Language:** the app's own text (the window, its dialogs, the tray menu, the file pickers
+  and its own messages, such as a file it cannot read or a service it cannot reach) is shown in the first of the user's Windows display languages the app
+  has: English, Ukrainian, Spanish, French, German, Portuguese, Italian, Polish, Simplified
+  Chinese or Japanese; English otherwise. It is decided when the app starts. The texts are
+  `app/locales/<tag>.json`, one file per language, read by the window and the tray alike.
+  What the service says (why a connect failed, the lines of an import error, an alert) is
+  English and shown as it is, in the window and in notifications alike, as are `th-service`'s command line and the logs. The menu and
+  messages below are given in English.
 - **Dashboard:** bundle, profile, protocol, public IP, state, kill-switch state; bundle import
   by drag-and-drop or file picker, with the list of import errors. After an import that left
   OpenVPN profiles without credentials, a prompt asks for them; the profile list marks any
@@ -357,7 +365,7 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
   - Status: `Connected: <profile> (<IP>)`, `Blocked`, or `Disconnected`
   - Rotate Now
   - Auto-Rotation (checkbox)
-  - Interval ▸ 15 min · 30 min · 1 hour · 2 hours · 4 hours
+  - Interval ▸ 15 min · 30 min · 1 h · 2 h · 4 h
   - Disconnect & unblock
   - Open Dashboard
   - Exit — disconnects, disengages the kill-switch, and quits the UI

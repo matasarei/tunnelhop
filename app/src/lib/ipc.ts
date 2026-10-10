@@ -1,6 +1,7 @@
 // The app's commands, typed. Everything the window does goes through here to the Rust side,
 // which talks to the service; the shapes mirror th-core's `ipc` types.
 import { invoke } from "@tauri-apps/api/core";
+import { t } from "$lib/i18n";
 
 export type Protocol = "wireguard" | "openvpn";
 
@@ -54,6 +55,8 @@ export const runtimeName: Record<Protocol, string> = {
   openvpn: "OpenVPN Community",
 };
 
+/** The language the app speaks, by the name of its file under `locales`. */
+export const language = () => invoke<string>("language");
 export const status = () => invoke<Report | null>("status");
 export const intervals = () => invoke<[number, string][]>("intervals");
 export const act = (action: Action) => invoke<void>("act", { action });
@@ -102,10 +105,8 @@ export const setCredentials = (
 export function runtimeProblem(report: Report, protocol: Protocol): string | null {
   const runtime = report.runtimes.find((r) => r.protocol === protocol)?.availability;
   const name = runtimeName[protocol];
-  if (!runtime || runtime.status === "missing") return `${name} is not installed`;
-  if (runtime.status === "too_old" && runtime.found === "unknown")
-    return `${name} could not be checked (${runtime.required} or newer is needed)`;
+  if (!runtime || runtime.status === "missing") return t("runtime.missing", { name });
   if (runtime.status === "too_old")
-    return`${name} ${runtime.found} is too old (${runtime.required} or newer is needed)`;
+    return t(runtime.found === "unknown" ? "runtime.unchecked" : "runtime.too_old", { name, ...runtime });
   return null;
 }

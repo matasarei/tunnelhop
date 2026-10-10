@@ -2,6 +2,7 @@
   // The username and password for a bundle's OpenVPN servers (SPEC §3.4): asked once for all
   // of them after an import, or for one server from the list. The password leaves this dialog
   // only towards the service, which seals it; the field is emptied as soon as it is sent.
+  import { t, tn } from "$lib/i18n";
   import { setCredentials, type Bundle, type Profile } from "$lib/ipc";
 
   let {
@@ -63,17 +64,14 @@
   const value = (e: Event) => (e.currentTarget as HTMLInputElement).value;
 </script>
 
-<fluent-dialog bind:this={dialog} type="modal" aria-label="Sign in" {ontoggle}>
+<fluent-dialog bind:this={dialog} type="modal" aria-label={t("signin.label")} {ontoggle}>
   <fluent-dialog-body>
-    <div slot="title">{profile ? `Sign in to ${profile.name}` : `Sign in to ${bundle.bundle_name}`}</div>
+    <div slot="title">{t("signin.title", { name: profile ? profile.name : bundle.bundle_name })}</div>
     <form id="credentials" onsubmit={save}>
       {#if profile}
-        <p>This server asks for a username and password. They apply to this server only.</p>
+        <p>{t("signin.one_server")}</p>
       {:else}
-        <p>
-          {waiting.length === 1 ? "One server needs" : `${waiting.length} servers need`} a username and
-          password from your VPN provider. They are used for every such server in this bundle.
-        </p>
+        <p>{tn("signin.needed", waiting.length)}</p>
       {/if}
       <fluent-text-input
         value={username}
@@ -82,7 +80,7 @@
         required
         autocomplete="off"
         spellcheck="false"
-      >Username</fluent-text-input>
+      >{t("signin.username")}</fluent-text-input>
       <fluent-text-input
         type="password"
         value={password}
@@ -90,11 +88,11 @@
         {onkeydown}
         required
         autocomplete="off"
-      >Password</fluent-text-input>
+      >{t("signin.password")}</fluent-text-input>
       {#if error}
         <fluent-message-bar intent="error" layout="multiline">{error}</fluent-message-bar>
       {/if}
-      <p class="hint">Stored by the TunnelHop service, encrypted for this PC. The app keeps no copy.</p>
+      <p class="hint">{t("signin.stored")}</p>
     </form>
     <fluent-button
       slot="action"
@@ -102,9 +100,9 @@
       disabled={saving || !username || !password}
       onclick={save}
     >
-      Save
+      {t("action.save")}
     </fluent-button>
-    <fluent-button slot="action" disabled={saving} onclick={cancel}>Not now</fluent-button>
+    <fluent-button slot="action" disabled={saving} onclick={cancel}>{t("action.not_now")}</fluent-button>
   </fluent-dialog-body>
 </fluent-dialog>
 

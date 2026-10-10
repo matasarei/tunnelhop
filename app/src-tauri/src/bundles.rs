@@ -4,6 +4,8 @@
 use serde::Serialize;
 use th_core::ipc::{BundleInfo, Response};
 
+use crate::lang::text;
+
 /// Every installed bundle, ordered by name, and the id of the active one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BundleList {
@@ -16,7 +18,10 @@ pub fn list(response: Response) -> Result<BundleList, String> {
     match response {
         Response::Bundles { bundles, active } => Ok(BundleList { bundles, active }),
         Response::Error { message } => Err(message),
-        other => Err(format!("the service answered with {other:?}")),
+        other => Err(text(
+            "client.unexpected",
+            &[("answer", &format!("{other:?}"))],
+        )),
     }
 }
 

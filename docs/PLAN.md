@@ -555,6 +555,36 @@ step (or per closely related pair), opened as a PR against `main`.
       on its line.
     - Not checked: the "too old" wording of the dialog, the WireGuard variant, dark theme,
       and a mouse click on the badge (the VM is driven by keyboard).
+32. [x] The app in ten languages, chosen from Windows' display language: English, Ukrainian,
+    Spanish, French, German, Portuguese, Italian, Polish, Simplified Chinese, Japanese.
+    - Landed: `app/locales/<tag>.json` (one file per language, read by the window and the
+      tray); `app/src-tauri/src/lang.rs` (the choice, from `GetUserPreferredUILanguages`, and
+      the Rust side's text); `app/src/lib/i18n.ts`; every text of the window, its dialogs,
+      the tray, the pickers and the messages about a chosen file; SPEC §5; TESTING §2.
+    - Not translated, by decision: what the service says (errors, import error lines,
+      alerts), `th-service`'s command line, the logs. Nothing under `crates/` changed and
+      the protocol is still version 3.
+    - Ruling: no translation library; `i18n.ts` has `t`, `tn` (the form for a number) and
+      `sentences`. No language picker: `TUNNELHOP_LANG` overrides Windows, for testing.
+    - Ruling: interval labels are "15 min", "1 h", "2 h" in English too (were "1 hour",
+      "2 hours"), so the tray needs no plural rules.
+    - Ruling: Traditional Chinese reads English; every Portuguese region reads the Brazilian
+      text; texts carry no markup, so `.conf`, `.ovpn` and `.zip` lost their code styling in
+      two places.
+    - A test holds the files together: every language has every text, the same
+      placeholders, and the plural forms its numbers ask for.
+    - Checked in `th-test` (2026-10-10), installer built from the branch, window 480 px wide,
+      `TUNNELHOP_LANG` set to `uk`, `de` and `ja` in turn: the whole window in each, plural
+      forms ("3 сервери", "サーバー 3 台"), the interval from the Rust side ("1 時間"), the
+      delete confirmation in Ukrainian, nothing cut off. With no override the VM's Windows
+      (Russian, then English) gave English.
+    - Not checked: the tray menu and notifications on screen (the VM's keyboard could not
+      open the tray; their text has unit tests), the other six languages on screen, a
+      Windows whose display language is one of the nine, dark theme. The translations were
+      written without a native speaker's review.
+33. [ ] The installer in the same ten languages: Tauri's NSIS `languages`, and TunnelHop's
+    own messages in `hooks.nsh` as `LangString`s. Open: whether Tauri ships Ukrainian,
+    Polish and Italian for its standard pages.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`

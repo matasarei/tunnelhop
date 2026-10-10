@@ -16,6 +16,8 @@ use th_core::ipc::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, oneshot};
 
+use crate::lang::text;
+
 /// What the app hears from the connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Update {
@@ -35,7 +37,13 @@ pub struct Options {
     pub retry: Duration,
 }
 
+/// Why the app is not connected, for the log.
 pub const NOT_RUNNING: &str = "the TunnelHop service is not running";
+
+/// The same, for the user: the answer to a request made while the service is away.
+pub fn not_running() -> String {
+    text("client.not_running", &[])
+}
 
 type Reply = oneshot::Sender<Result<Response, String>>;
 
@@ -65,10 +73,8 @@ impl ServiceClient {
         self.requests
             .send((request, reply))
             .await
-            .map_err(|_| "the app is shutting down".to_string())?;
-        answer
-            .await
-            .map_err(|_| "the connection to the service was lost".to_string())?
+            .map_err(|_| text("client.closing", &[]))?;
+        answer.await.map_err(|_| text("client.lost", &[]))?
     }
 }
 
@@ -105,7 +111,7 @@ async fn run(
                 _ = &mut retry => break,
                 request = requests.recv() => match request {
                     Some((_, reply)) => {
-                        let _ = reply.send(Err(NOT_RUNNING.into()));
+                        let _ = reply.send(Err(not_running()));
                     }
                     None => return,
                 },
