@@ -30,6 +30,9 @@ param(
     [int]$Watch = 0,
     # UDP ports of the VPN servers on 192.168.77.1 (test-infra: wg-a, wg-b, ovpn).
     [int[]]$VpnPorts = @(41820, 41821, 1194),
+    # The service whose `ctl` drives the test: the dev copy, or the installed one
+    # (C:\Program Files\TunnelHop\th-service.exe).
+    [string]$Service = 'C:\th\th-service.exe',
     [string]$VM = 'th-test'
 )
 
@@ -37,10 +40,12 @@ $ErrorActionPreference = 'Stop'
 $credential = Import-Clixml (Join-Path $env:USERPROFILE '.tunnelhop\th-test.cred')
 $session = New-PSSession -VMName $VM -Credential $credential
 try {
-    $result = Invoke-Command -Session $session -ArgumentList $Rotations, $Watch {
-        param($count, $watch)
+    $result = Invoke-Command -Session $session -ArgumentList $Rotations, $Watch, $Service {
+        param($count, $watch, $service)
+        # The capture is written to C:\th whichever service is under test.
+        New-Item -ItemType Directory -Force C:\th | Out-Null
         function Ctl {
-            $text = & C:\th\th-service.exe ctl @args 2>$null | Out-String
+            $text = & $service ctl @args 2>$null | Out-String
             [pscustomobject]@{ Code = $LASTEXITCODE; Json = $(try { $text | ConvertFrom-Json } catch { $null }); Text = $text.Trim() }
         }
         $group = (pktmon list --json | Out-String | ConvertFrom-Json) |

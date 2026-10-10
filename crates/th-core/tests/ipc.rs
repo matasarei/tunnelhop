@@ -92,7 +92,9 @@ fn every_message_round_trips() {
     }
 
     let responses = vec![
-        Response::Hello { version: 1 },
+        Response::Hello {
+            version: PROTOCOL_VERSION,
+        },
         Response::Pong,
         Response::Status { report: report() },
         Response::Imported {
@@ -153,9 +155,16 @@ fn version_mismatch_is_refused() {
             version: PROTOCOL_VERSION
         })
     );
-    let error = ipc::check_version(2).unwrap_err();
-    assert_eq!(error, IpcError::VersionMismatch { client: 2 });
-    assert!(error.to_string().contains("service speaks 1"));
+    // An older client (an app left running across an upgrade) and a newer one alike.
+    for client in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+        let error = ipc::check_version(client).unwrap_err();
+        assert_eq!(error, IpcError::VersionMismatch { client });
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("service speaks {PROTOCOL_VERSION}"))
+        );
+    }
 }
 
 #[test]

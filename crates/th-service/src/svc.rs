@@ -11,7 +11,7 @@ use th_core::driver::VpnDriver;
 use th_core::manifest::Protocol;
 use tokio::sync::oneshot;
 use windows_service::service::{
-    ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
+    Service, ServiceAccess, ServiceAction, ServiceActionType, ServiceControl, ServiceControlAccept,
     ServiceErrorControl, ServiceExitCode, ServiceFailureActions, ServiceFailureResetPeriod,
     ServiceInfo, ServiceStartType, ServiceState, ServiceStatus, ServiceType,
 };
@@ -294,8 +294,56 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
     })
 }
 
+/// Whether opening the service failed because there is none, as opposed to, say, access denied.
+fn not_registered(error: &windows_service::Error) -> bool {
+    const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
+    matches!(error, windows_service::Error::Winapi(e)
+        if e.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST))
+}
+
+/// Stop the service and wait until it has: its stop handler disconnects and lifts the block.
+fn stop_and_wait(service: &Service) -> Result<(), Box<dyn Error>> {
+    let started = Instant::now();
+    let mut asked = false;
+    loop {
+        match service.query_status()?.current_state {
+            ServiceState::Stopped => return Ok(()),
+            // A service that is still starting, or already stopping, refuses a stop: wait
+            // until it has settled.
+            ServiceState::StartPending | ServiceState::StopPending => {}
+            _ if !asked => {
+                service.stop()?;
+                asked = true;
+            }
+            _ => {}
+        }
+        if started.elapsed() > STOP_TIMEOUT {
+            return Err(format!("{SERVICE_NAME} did not stop within 30 s").into());
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
+/// Wait until a service that was just started is running.
+fn wait_until_running(service: &Service) -> Result<(), Box<dyn Error>> {
+    let started = Instant::now();
+    loop {
+        match service.query_status()?.current_state {
+            ServiceState::Running => return Ok(()),
+            ServiceState::Stopped => {
+                return Err(format!("{SERVICE_NAME} stopped while starting").into());
+            }
+            _ if started.elapsed() > STOP_TIMEOUT => {
+                return Err(format!("{SERVICE_NAME} did not start within 30 s").into());
+            }
+            _ => std::thread::sleep(Duration::from_millis(250)),
+        }
+    }
+}
+
 /// Register the service to start automatically as LocalSystem, restart it if it crashes, and
-/// start it now.
+/// start it now. Over an existing registration (an upgrade, or a repeated install) the service
+/// is stopped, pointed at this executable and started again; its data is kept.
 pub fn install() -> Result<(), Box<dyn Error>> {
     let manager = ServiceManager::local_computer(
         None::<&str>,
@@ -313,10 +361,20 @@ pub fn install() -> Result<(), Box<dyn Error>> {
         account_name: None, // LocalSystem
         account_password: None,
     };
-    let service = manager.create_service(
-        &info,
-        ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::QUERY_STATUS,
-    )?;
+    let access = ServiceAccess::CHANGE_CONFIG
+        | ServiceAccess::START
+        | ServiceAccess::STOP
+        | ServiceAccess::QUERY_STATUS;
+    let service = match manager.open_service(SERVICE_NAME, access) {
+        Ok(existing) => {
+            stop_and_wait(&existing)?;
+            existing.change_config(&info)?;
+            log::info!("{SERVICE_NAME} was already registered; updating it");
+            existing
+        }
+        Err(e) if not_registered(&e) => manager.create_service(&info, access)?,
+        Err(e) => return Err(e.into()),
+    };
     service.set_description(DESCRIPTION)?;
     let restart = ServiceAction {
         action_type: ServiceActionType::Restart,
@@ -336,27 +394,57 @@ pub fn install() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// Stop and delete the service, then remove `%ProgramData%\TunnelHop`.
+/// Stop and delete the service, lift any block, then remove `%ProgramData%\TunnelHop`
+/// (SPEC §6). Each part is attempted whatever the state of the others, so an uninstall after a
+/// crash, or a second uninstall, still leaves the machine clean.
 pub fn uninstall() -> Result<(), Box<dyn Error>> {
-    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
-    let service = manager.open_service(
-        SERVICE_NAME,
-        ServiceAccess::STOP | ServiceAccess::QUERY_STATUS | ServiceAccess::DELETE,
-    )?;
-    if service.query_status()?.current_state != ServiceState::Stopped {
-        service.stop()?;
-        let started = Instant::now();
-        while service.query_status()?.current_state != ServiceState::Stopped {
-            if started.elapsed() > STOP_TIMEOUT {
-                return Err(format!("{SERVICE_NAME} did not stop within 30 s").into());
-            }
-            std::thread::sleep(Duration::from_millis(250));
-        }
+    let service = remove_service();
+    if let Err(e) = &service {
+        log::error!("{SERVICE_NAME} could not be removed: {e}");
     }
-    service.delete()?;
-    drop(service);
-    log::info!("removed {SERVICE_NAME}");
+    // Whatever the service managed: no filter of ours outlives an uninstall.
+    let block = WfpKillSwitch::disengage_now();
+    if let Err(e) = &block {
+        log::error!("the block could not be lifted: {e}");
+    }
+    let data = remove_data();
+    service?;
+    block?;
+    data
+}
 
+fn remove_service() -> Result<(), Box<dyn Error>> {
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+    let access = ServiceAccess::START
+        | ServiceAccess::STOP
+        | ServiceAccess::QUERY_STATUS
+        | ServiceAccess::DELETE;
+    match manager.open_service(SERVICE_NAME, access) {
+        Ok(service) => {
+            // A service that is not running (it crashed, or was stopped by hand) may have left
+            // a tunnel and the block behind. Starting it takes both over, and stopping it then
+            // brings them down the way every stop does.
+            if service.query_status()?.current_state == ServiceState::Stopped {
+                match service
+                    .start::<&str>(&[])
+                    .map_err(Into::into)
+                    .and_then(|()| wait_until_running(&service))
+                {
+                    Ok(()) => {}
+                    Err(e) => log::warn!("{SERVICE_NAME} could not be started to clean up: {e}"),
+                }
+            }
+            stop_and_wait(&service)?;
+            service.delete()?;
+            log::info!("removed {SERVICE_NAME}");
+        }
+        Err(e) if not_registered(&e) => log::info!("{SERVICE_NAME} is not registered"),
+        Err(e) => return Err(e.into()),
+    }
+    Ok(())
+}
+
+fn remove_data() -> Result<(), Box<dyn Error>> {
     let layout = Layout::system()?;
     match std::fs::remove_dir_all(layout.root()) {
         Ok(()) => log::info!("removed {}", layout.root().display()),
