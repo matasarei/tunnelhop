@@ -311,6 +311,41 @@ mod tests {
         }
     }
 
+    /// The window's keys are checked by its compiler; this side's are plain strings, and a
+    /// mistyped one would be shown to the user as itself.
+    #[test]
+    fn every_key_this_side_asks_for_exists() {
+        let english = &catalogues()[ENGLISH];
+        let sources = [
+            include_str!("bundles.rs"),
+            include_str!("import.rs"),
+            include_str!("lib.rs"),
+            include_str!("pipe_client.rs"),
+            include_str!("servers.rs"),
+            include_str!("tray.rs"),
+        ];
+        let mut asked = 0;
+        for source in sources {
+            // Every call reads `text("key"` or `text(` and the key on the next line.
+            for call in source.split("text(").skip(1) {
+                let Some(key) = call
+                    .trim_start()
+                    .strip_prefix('"')
+                    .and_then(|rest| rest.split_once('"'))
+                    .map(|(key, _)| key)
+                else {
+                    continue;
+                };
+                assert!(english.contains_key(key), "no text for {key}");
+                asked += 1;
+            }
+        }
+        assert!(
+            asked > 30,
+            "only {asked} keys found: the search no longer matches"
+        );
+    }
+
     #[test]
     fn a_translation_is_used() {
         assert_eq!(text_in("uk", "tray.status.blocked", &[]), "Заблоковано");
