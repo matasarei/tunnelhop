@@ -1,47 +1,56 @@
 <script lang="ts">
-  // The window: the service's state and the same controls as the tray, in Fluent 2 (the
-  // design system of Windows 11). Every control sends a request; what the window shows changes
-  // only with the service's next report, so it never shows something the service did not do.
-  // The profile list, import and bundle management arrive with steps 18, 27 and 28.
-  import { invoke } from "@tauri-apps/api/core";
+  // The window: the service's state, the same controls as the tray, the bundle's servers, and
+  // bundle import, in Fluent 2 (the design system of Windows 11). Every control sends a request;
+  // what the window shows changes only with the service's next report, so it never shows
+  // something the service did not do. Bundle management and editing servers arrive with steps
+  // 27 and 28.
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { onMount } from "svelte";
+  import Credentials from "$lib/Credentials.svelte";
+  import Servers from "$lib/Servers.svelte";
   import { followSystemTheme } from "$lib/fluent";
-
-  type Report = {
-    state: "connected" | "blocked" | "disconnected";
-    profile_id: string | null;
-    public_ip: string | null;
-    killswitch_engaged: boolean;
-    bundle: { bundle_name: string; profiles: { id: string; name: string; protocol: string }[] } | null;
-    auto_rotate: boolean;
-    interval_minutes: number;
-  };
-  type Action =
-    | { type: "connect" }
-    | { type: "rotate" }
-    | { type: "disconnect" }
-    | { type: "set_auto_rotate"; enabled: boolean }
-    | { type: "set_interval"; minutes: number }
-    | { type: "exit" };
+  import * as ipc from "$lib/ipc";
+  import type { Action, Bundle, Profile, Report } from "$lib/ipc";
 
   let report = $state<Report | null>(null);
   let intervals = $state<[number, string][]>([]);
   let busy = $state(false);
   let error = $state<string | null>(null);
   let alert = $state<string | null>(null);
+  /** What the last import ended in, until dismissed. */
+  let notice = $state<string | null>(null);
+  let importErrors = $state<string[] | null>(null);
+  /** An imported bundle not made active yet, because that would drop the current tunnel. */
+  let pendingSwitch = $state<Bundle | null>(null);
+  /** The credentials dialog: for a whole bundle (profile null) or one server. */
+  let asking = $state<{ bundle: Bundle; profile: Profile | null } | null>(null);
+  let dragging = $state(false);
 
   onMount(() => {
     const stopTheme = followSystemTheme();
-    invoke<Report | null>("status").then((r) => (report = r));
-    invoke<[number, string][]>("intervals").then((list) => (intervals = list));
+    ipc.status().then((r) => (report = r));
+    ipc.intervals().then((list) => (intervals = list));
     const unlisten = [
       listen<Report | null>("status", (e) => {
         report = e.payload;
         // A tunnel up again answers the last alert.
         if (e.payload?.state === "connected") alert = null;
+        // The bundle waiting for "Switch now" became the active one some other way.
+        if (pendingSwitch && e.payload?.bundle?.bundle_id === pendingSwitch.bundle_id) pendingSwitch = null;
       }),
       listen<string>("alert", (e) => (alert = e.payload)),
+      // Files dropped on the window arrive as paths; the Rust side reads the file.
+      getCurrentWebview().onDragDropEvent((e) => {
+        if (e.payload.type === "enter" || e.payload.type === "over") dragging = true;
+        else if (e.payload.type === "leave") dragging = false;
+        else if (e.payload.type === "drop") {
+          dragging = false;
+          const paths = e.payload.paths;
+          if (paths.length === 1) importFrom(paths[0]);
+          else error = "Drop one bundle .zip at a time.";
+        }
+      }),
     ];
     return () => {
       stopTheme();
@@ -49,16 +58,56 @@
     };
   });
 
-  async function act(action: Action) {
+  /** Run one request with the controls disabled; a refusal is shown in the window. */
+  async function run<T>(request: () => Promise<T>): Promise<T | undefined> {
     busy = true;
     error = null;
     try {
-      await invoke("act", { action });
+      return await request();
     } catch (e) {
       error = String(e);
     } finally {
       busy = false;
     }
+  }
+
+  const act = (action: Action) => run(() => ipc.act(action));
+
+  /** Import the dropped file, or one from the native picker when no path is given. */
+  async function importFrom(path?: string) {
+    // The button is disabled in both cases; a drop is not, and must not vanish without a word.
+    if (!report) {
+      error = "The TunnelHop service is not running, so the bundle was not imported.";
+      return;
+    }
+    if (busy) {
+      error = "The bundle was not imported: another request was still running. Drop it again.";
+      return;
+    }
+    importErrors = null;
+    notice = null;
+    const outcome = await run(() => ipc.importBundle(path));
+    if (!outcome || outcome.type === "cancelled") return;
+    if (outcome.type === "refused") {
+      importErrors = outcome.errors;
+      return;
+    }
+    const { bundle } = outcome;
+    const count = bundle.profiles.length;
+    notice = outcome.already_present
+      ? `"${bundle.bundle_name}" is already installed.`
+      : `Imported "${bundle.bundle_name}" (${count} ${count === 1 ? "server" : "servers"}).`;
+    if (report?.bundle?.bundle_id !== bundle.bundle_id) {
+      // Switching disconnects the current bundle first: with a tunnel up, that is the user's call.
+      if (report?.state === "disconnected") await run(() => ipc.selectBundle(bundle.bundle_id));
+      else pendingSwitch = bundle;
+    }
+    if (outcome.needs_credentials.length > 0) asking = { bundle, profile: null };
+  }
+
+  async function switchTo(bundle: Bundle) {
+    pendingSwitch = null;
+    await run(() => ipc.selectBundle(bundle.bundle_id));
   }
 
   const reachable = $derived(report !== null);
@@ -108,6 +157,36 @@
       <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (error = null)}>✕</fluent-button>
     </fluent-message-bar>
   {/if}
+  {#if importErrors}
+    <fluent-message-bar intent="error" layout="multiline">
+      <div>
+        <strong>The bundle was not imported.</strong>
+        {importErrors.length === 1 ? "One problem was found:" : `${importErrors.length} problems were found:`}
+        <ul class="errors">
+          {#each importErrors as line}<li>{line}</li>{/each}
+        </ul>
+      </div>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (importErrors = null)}>✕</fluent-button>
+    </fluent-message-bar>
+  {/if}
+  {#if notice}
+    <fluent-message-bar intent="success" layout="multiline">
+      {notice}
+      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (notice = null)}>✕</fluent-button>
+    </fluent-message-bar>
+  {/if}
+  {#if pendingSwitch}
+    {@const bundle = pendingSwitch}
+    <fluent-message-bar intent="info" layout="multiline">
+      {#if engaged}
+        Switching to "{bundle.bundle_name}" disconnects the current tunnel and lifts the block first.
+      {:else}
+        "{bundle.bundle_name}" is installed, but not the bundle in use.
+      {/if}
+      <fluent-button slot="actions" size="small" disabled={busy} onclick={() => switchTo(bundle)}>Switch now</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (pendingSwitch = null)}>✕</fluent-button>
+    </fluent-message-bar>
+  {/if}
 
   <section class="card hero">
     <div class="badge" class:connected class:blocked class:off={!connected && !blocked} aria-hidden="true">
@@ -141,10 +220,25 @@
     {#if busy}<fluent-spinner size="tiny" aria-label="Working"></fluent-spinner>{/if}
   </div>
 
+  <div class="heading">
+    <h2>{report?.bundle ? `Servers in ${report.bundle.bundle_name}` : "Servers"}</h2>
+    <fluent-button size="small" disabled={!reachable || busy} onclick={() => importFrom()}>Import bundle…</fluent-button>
+  </div>
+  {#if report?.bundle}
+    <Servers
+      {report}
+      {busy}
+      onconnect={(profile) => act({ type: "connect", profile_id: profile.id })}
+      oncredentials={(profile) => report?.bundle && (asking = { bundle: report.bundle, profile })}
+    />
+  {:else}
+    <section class="card empty">
+      No bundle yet. Import a bundle <code>.zip</code> from your VPN provider, or drop it on this window.
+    </section>
+  {/if}
+
   <h2>Details</h2>
   <section class="card rows">
-    <div class="row"><span class="label">Bundle</span><span>{report?.bundle?.bundle_name ?? "None selected"}</span></div>
-    <div class="row"><span class="label">Server</span><span>{profileName ?? "—"}</span></div>
     <div class="row"><span class="label">Public IP</span><span>{report?.public_ip ?? "—"}</span></div>
     <div class="row">
       <span class="label">Kill-switch</span>
@@ -190,6 +284,14 @@
     <span class="hint">Disconnects, lifts the block, and closes the app. Closing the window keeps it in the tray.</span>
   </footer>
 </main>
+
+{#if asking}
+  <Credentials bundle={asking.bundle} profile={asking.profile} onclose={() => (asking = null)} />
+{/if}
+
+{#if dragging}
+  <div class="drop" aria-hidden="true"><div>Drop a bundle <code>.zip</code> to import it</div></div>
+{/if}
 
 <style>
   :global(body) {
@@ -290,5 +392,42 @@
   footer fluent-button {
     flex: none;
     white-space: nowrap;
+  }
+  .heading {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .heading h2 {
+    margin: 0;
+  }
+  .empty {
+    padding: 16px;
+    color: var(--colorNeutralForeground3, #616161);
+  }
+  .errors {
+    margin: 6px 0 0;
+    padding-left: 18px;
+    max-height: 160px;
+    overflow: auto;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-size: 12px;
+  }
+  .drop {
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: color-mix(in srgb, var(--colorNeutralBackground2, #fafafa) 85%, transparent);
+    pointer-events: none;
+  }
+  .drop div {
+    padding: 24px 32px;
+    border: 2px dashed var(--colorBrandStroke1, #0f6cbd);
+    border-radius: var(--borderRadiusLarge, 6px);
+    background: var(--colorNeutralBackground1, #fff);
+    font-size: 16px;
   }
 </style>

@@ -2,6 +2,7 @@
 //! It holds no state of its own beyond the last status report: every change goes to the
 //! service as a request, and what the app shows comes back as the service's next report.
 
+pub mod import;
 pub mod pipe_client;
 pub mod tray;
 
@@ -16,8 +17,11 @@ mod app {
 
     use tauri::{AppHandle, Emitter, Manager, WindowEvent};
     use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+    use tauri_plugin_dialog::DialogExt;
     use tauri_plugin_notification::NotificationExt;
-    use th_core::ipc::{Event, Request, Response, StatusReport};
+    use th_core::ipc::{Event, Request, Response, Secret, StatusReport};
+
+    use crate::import::{ImportOutcome, outcome, read_bundle};
 
     use crate::pipe_client::{Options, ServiceClient, Update};
     use crate::tray::{Action, Tray};
@@ -194,11 +198,19 @@ mod app {
     #[derive(Debug, serde::Deserialize)]
     #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
     enum WindowAction {
-        Connect,
+        /// A random server, or the one picked in the list.
+        Connect {
+            #[serde(default)]
+            profile_id: Option<String>,
+        },
         Rotate,
         Disconnect,
-        SetAutoRotate { enabled: bool },
-        SetInterval { minutes: u32 },
+        SetAutoRotate {
+            enabled: bool,
+        },
+        SetInterval {
+            minutes: u32,
+        },
         Exit,
     }
 
@@ -206,7 +218,7 @@ mod app {
     #[tauri::command]
     async fn act(app: AppHandle, action: WindowAction) -> Result<(), String> {
         let request = match action {
-            WindowAction::Connect => Request::Connect { profile_id: None },
+            WindowAction::Connect { profile_id } => Request::Connect { profile_id },
             WindowAction::Rotate => Request::RotateNow,
             WindowAction::Disconnect => Request::Disconnect,
             WindowAction::SetAutoRotate { enabled } => Request::SetAutoRotate { enabled },
@@ -215,6 +227,62 @@ mod app {
                 exit(app).await;
                 return Ok(());
             }
+        };
+        send(&app, request).await
+    }
+
+    /// Import a bundle: the file dropped on the window, or one chosen in the native picker when
+    /// no path is given. The file is read here, as the signed-in user, and its bytes go to the
+    /// service.
+    #[tauri::command]
+    async fn import_bundle(app: AppHandle, path: Option<String>) -> Result<ImportOutcome, String> {
+        let path = match path {
+            Some(path) => std::path::PathBuf::from(path),
+            None => {
+                let mut dialog = app.dialog().file();
+                // Owned by the window, so the picker cannot end up behind it.
+                if let Some(window) = app.get_webview_window("main") {
+                    dialog = dialog.set_parent(&window);
+                }
+                let picked = dialog
+                    .set_title("Import a TunnelHop bundle")
+                    .add_filter("TunnelHop bundle", &["zip"])
+                    .blocking_pick_file();
+                match picked.and_then(|file| file.into_path().ok()) {
+                    Some(path) => path,
+                    None => return Ok(ImportOutcome::Cancelled),
+                }
+            }
+        };
+        let zip_base64 = tauri::async_runtime::spawn_blocking(move || read_bundle(&path))
+            .await
+            .map_err(|e| format!("could not read the bundle: {e}"))??;
+        let client = app.state::<AppState>().client.clone();
+        outcome(client.request(Request::ImportBundle { zip_base64 }).await?)
+    }
+
+    /// Make an installed bundle the active one. The service disconnects the old one first.
+    #[tauri::command]
+    async fn select_bundle(app: AppHandle, bundle_id: String) -> Result<(), String> {
+        send(&app, Request::SelectBundle { bundle_id }).await
+    }
+
+    /// Store a username and password for a bundle's OpenVPN profiles: the listed ones, or every
+    /// one as the bundle's default when the list is empty. The password is a `Secret` from the
+    /// moment it is deserialized: never logged, wiped when dropped.
+    #[tauri::command]
+    async fn set_credentials(
+        app: AppHandle,
+        bundle_id: String,
+        profile_ids: Vec<String>,
+        username: String,
+        password: Secret,
+    ) -> Result<(), String> {
+        let request = Request::SetCredentials {
+            bundle_id,
+            profile_ids,
+            username,
+            password,
         };
         send(&app, request).await
     }
@@ -271,7 +339,15 @@ mod app {
                 Some(vec![HIDDEN_ARG]),
             ))
             .plugin(tauri_plugin_notification::init())
-            .invoke_handler(tauri::generate_handler![status, act, intervals])
+            .plugin(tauri_plugin_dialog::init())
+            .invoke_handler(tauri::generate_handler![
+                status,
+                act,
+                intervals,
+                import_bundle,
+                select_bundle,
+                set_credentials
+            ])
             .setup(|app| {
                 let handle = app.handle().clone();
                 let options = Options {

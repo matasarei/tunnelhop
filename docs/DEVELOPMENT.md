@@ -278,6 +278,17 @@ cd app; npx tauri build --no-bundle; cd ..          # -> target\release\th-app.e
   `New-ScheduledTaskPrincipal -UserId "$env:COMPUTERNAME\user" -LogonType Interactive
   -RunLevel Limited` and the exe as its action, and start it with `Start-ScheduledTask`. That
   runs the app in the user's session with the normal, non-admin token, as a real launch would.
+  Run `Stop-ScheduledTask` first when the app was closed with Exit: Windows may still count the
+  old instance as running and skip the start.
+- **Bundles for the app to import go under the user's profile** (for example
+  `C:\Users\user\Downloads\bundles`): the unelevated app cannot read `C:\th\configs`.
+  `test-infra\bundles.py` builds them, including `bundle-auth.zip` (asks for credentials; the
+  lab user is `th-test-user`, its password is in `gen.sh`) and `bundle-hostile.zip` (must be
+  refused). Rebuild them without touching the keys with
+  `docker compose run --rm --entrypoint python3 gen /infra/bundles.py /infra/out` (from Git
+  Bash, prefix `MSYS_NO_PATHCONV=1`).
+- **The app can be driven by keyboard** through `Msvm_Keyboard` (`TypeKey` for Tab and Enter,
+  `TypeText` for a path in the file picker), with the screen capture to see where focus is.
 - **To see the VM's screen without the Hyper-V window:** `GetVirtualSystemThumbnailImage` on
   `Msvm_VirtualSystemManagementService` returns the display as RGB565, with 4 bytes of padding
   at the end. A black image means the display is asleep: send a key through `Msvm_Keyboard`.
