@@ -367,7 +367,10 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Ok(imported) => imported,
             Err(refusal) => return *refusal,
         };
+        // Selecting lifts a block left by a crash, and that is the user's to ask for: the
+        // bundle then waits, installed, to be switched to.
         if inner.active.is_none()
+            && !inner.orphan_block
             && let Response::Error { message } = self.select(inner, imported.id.as_str()).await
         {
             // The bundle is installed either way; the user can still switch to it.

@@ -1211,3 +1211,20 @@ async fn a_zip_of_bare_configs_imports_as_a_bundle() {
     assert!(errors[0].starts_with("readme.txt"), "{errors:?}");
     assert_eq!(std::fs::read_dir(lab.layout.bundles()).unwrap().count(), 1);
 }
+
+#[tokio::test]
+async fn a_new_bundle_does_not_lift_a_block_left_by_a_crash() {
+    let lab = lab_in(tempfile::tempdir().unwrap(), true).await;
+
+    let response = create(&lab, "", &[("x.conf", &wireguard("198.51.100.37:51820"))]).await;
+
+    let (id, _, _) = edited(response);
+    assert!(lab.log.take().is_empty(), "the block was not touched");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Blocked);
+    assert!(status.killswitch_engaged);
+    assert!(status.bundle.is_none(), "installed, not put in use");
+    let (bundles, in_use) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(bundles, [("My servers".to_string(), id)]);
+    assert_eq!(in_use, None);
+}

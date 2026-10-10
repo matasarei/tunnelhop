@@ -59,7 +59,7 @@ pub enum Request {
     },
     /// Make a new bundle of these config files (SPEC §3.5), for a user whose provider hands
     /// out single files. An empty `name` means "My servers". Answered like an import; the new
-    /// bundle also becomes the active one when none is.
+    /// bundle also becomes the active one when none is and nothing is blocked.
     CreateBundle {
         name: String,
         files: Vec<ProfileFile>,
