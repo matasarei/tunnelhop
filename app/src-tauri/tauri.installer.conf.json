@@ -3,6 +3,7 @@
     "beforeBuildCommand": "npm run build && cargo build --release -p th-service"
   },
   "bundle": {
+    "active": true,
     "resources": {
       "../../target/release/th-service.exe": "th-service.exe"
     }
