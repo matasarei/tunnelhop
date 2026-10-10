@@ -411,7 +411,11 @@ fn edits_round_trip_and_validate() {
         bundle_id: "0123456789abcdef".into(),
         profile_ids: vec!["wg-a".into()],
     };
-    for (id, request) in [add, remove].into_iter().enumerate() {
+    let create = Request::CreateBundle {
+        name: "Proton UA".into(),
+        files: vec![ProfileFile::new("", "ua-83.conf", b"[Interface]\n")],
+    };
+    for (id, request) in [add, remove, create].into_iter().enumerate() {
         assert!(request.validate().is_ok(), "{request:?}");
         let message = ClientMessage {
             id: id as u64,
@@ -494,6 +498,29 @@ fn files_to_add_are_checked_before_the_service_sees_them() {
     assert!(remove(vec![]).validate().is_err());
     assert!(remove(vec!["wg-a", "UPPER"]).validate().is_err());
     assert!(remove(vec!["wg-a", "ovpn"]).validate().is_ok());
+
+    let create = |name: &str, files: Vec<ProfileFile>| Request::CreateBundle {
+        name: name.into(),
+        files,
+    };
+    // No name is allowed: the service calls the bundle "My servers".
+    assert!(create("", vec![ok("", "a.conf")]).validate().is_ok());
+    assert!(
+        create(&"n".repeat(100), vec![ok("", "a.ovpn")])
+            .validate()
+            .is_ok()
+    );
+    assert!(
+        create(&"n".repeat(101), vec![ok("", "a.conf")])
+            .validate()
+            .is_err()
+    );
+    assert!(create("Empty", vec![]).validate().is_err());
+    assert!(
+        create("Notes", vec![ok("", "notes.txt")])
+            .validate()
+            .is_err()
+    );
 }
 
 #[test]

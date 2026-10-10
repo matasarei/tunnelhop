@@ -1019,3 +1019,195 @@ async fn editing_without_a_tunnel_starts_none() {
     assert_eq!(status.state, State::Connected);
     assert_eq!(status.bundle.unwrap().bundle_id, new);
 }
+
+async fn create(lab: &Lab, name: &str, files: &[(&str, &str)]) -> Response {
+    lab.orchestrator
+        .handle(Request::CreateBundle {
+            name: name.into(),
+            files: files
+                .iter()
+                .map(|(file_name, content)| ProfileFile::new("", file_name, content.as_bytes()))
+                .collect(),
+        })
+        .await
+}
+
+/// A zip of bare config files, as a user makes one by zipping what a provider gave them.
+fn config_zip(files: &[(&str, &str)]) -> Vec<u8> {
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for (name, content) in files {
+        writer
+            .start_file(*name, SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(content.as_bytes()).unwrap();
+    }
+    writer.finish().unwrap().into_inner()
+}
+
+#[tokio::test]
+async fn loose_config_files_become_the_bundle_in_use() {
+    let lab = lab().await;
+    let ua = wireguard("198.51.100.30:51820");
+
+    let response = create(
+        &lab,
+        "Proton UA",
+        &[("wg-UA-83.conf", &ua), ("c.ovpn", OPENVPN)],
+    )
+    .await;
+
+    let (id, profiles, needs) = edited(response);
+    assert_eq!(profiles, ["wg-ua-83", "c"]);
+    assert_eq!(needs, ["c"], "the OpenVPN file asks for sign-in");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    let bundle = status.bundle.expect("the new bundle is the one in use");
+    assert_eq!(
+        (bundle.bundle_id.as_str(), bundle.bundle_name.as_str()),
+        (id.as_str(), "Proton UA")
+    );
+    assert_eq!(status.state, State::Disconnected, "made, not connected");
+    assert!(lab.log.take().is_empty(), "no tunnel, no block");
+
+    // It is a bundle like any other from here on.
+    assert_eq!(connect(&lab, "wg-ua-83").await.state, State::Connected);
+
+    // The same files and name again are the same bundle.
+    let again = create(
+        &lab,
+        "Proton UA",
+        &[("wg-UA-83.conf", &ua), ("c.ovpn", OPENVPN)],
+    )
+    .await;
+    assert!(
+        matches!(&again, Response::Imported { bundle, already_present: true, .. } if bundle.bundle_id == id),
+        "{again:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_new_bundle_does_not_take_over_from_the_one_in_use() {
+    let lab = lab().await;
+    let active = imported_and_selected(&lab).await;
+    connect(&lab, "wg-a").await;
+    lab.log.take();
+
+    let (id, _, _) =
+        edited(create(&lab, "", &[("x.conf", &wireguard("198.51.100.31:51820"))]).await);
+
+    assert!(lab.log.take().is_empty(), "the tunnel was not touched");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Connected);
+    assert_eq!(status.bundle.unwrap().bundle_id, active);
+    let (bundles, in_use) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert!(
+        bundles.contains(&("My servers".to_string(), id)),
+        "{bundles:?}"
+    );
+    assert_eq!(in_use, Some(active));
+}
+
+#[tokio::test]
+async fn files_that_cannot_become_a_bundle_leave_nothing_behind() {
+    let lab = lab().await;
+    let hostile = wireguard("198.51.100.32:51820").replace("[Peer]", "PostUp = calc.exe\n[Peer]");
+
+    let response = create(
+        &lab,
+        "Bad",
+        &[
+            ("ok.conf", &wireguard("198.51.100.33:51820")),
+            ("evil.conf", &hostile),
+        ],
+    )
+    .await;
+    let Response::ImportFailed { errors } = &response else {
+        panic!("expected a refusal, got {response:?}");
+    };
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("evil.conf") && e.contains("PostUp")),
+        "{errors:?}"
+    );
+
+    // Refused before a zip is built: something that is not a config at all.
+    let response = lab
+        .orchestrator
+        .handle(Request::CreateBundle {
+            name: "Notes".into(),
+            files: vec![ProfileFile::new("", "notes.txt", b"hello")],
+        })
+        .await;
+    assert!(
+        matches!(response, Response::ImportFailed { .. }),
+        "{response:?}"
+    );
+
+    assert_eq!(std::fs::read_dir(lab.layout.bundles()).unwrap().count(), 0);
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert!(status.bundle.is_none());
+}
+
+#[tokio::test]
+async fn a_new_bundle_counts_against_the_cap() {
+    let lab = lab().await;
+    for n in 0..th_core::bundle::MAX_BUNDLES {
+        imported_as(&lab, &format!("Lab {n}")).await;
+    }
+    let response = create(
+        &lab,
+        "One more",
+        &[("x.conf", &wireguard("198.51.100.34:51820"))],
+    )
+    .await;
+    assert!(is_error(&response, "delete a bundle first"), "{response:?}");
+    assert_eq!(
+        std::fs::read_dir(lab.layout.bundles()).unwrap().count(),
+        th_core::bundle::MAX_BUNDLES
+    );
+}
+
+#[tokio::test]
+async fn a_zip_of_bare_configs_imports_as_a_bundle() {
+    let lab = lab().await;
+    let a = wireguard("198.51.100.35:51820");
+    let b = wireguard("198.51.100.36:51820");
+    let import = |zip: Vec<u8>| {
+        let zip_base64 = ipc::encode_zip(&zip);
+        let orchestrator = &lab.orchestrator;
+        async move {
+            orchestrator
+                .handle(Request::ImportBundle { zip_base64 })
+                .await
+        }
+    };
+
+    let response = import(config_zip(&[("wg-UA-83.conf", &a), ("wg-UA-21.conf", &b)])).await;
+    let Response::Imported {
+        bundle,
+        already_present,
+        ..
+    } = response
+    else {
+        panic!("expected an import, got {response:?}");
+    };
+    assert_eq!(bundle.bundle_name, "My servers");
+    let mut ids: Vec<_> = bundle.profiles.iter().map(|p| p.id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, ["wg-ua-21", "wg-ua-83"]);
+    assert!(!already_present);
+    // An import never switches by itself; the window asks for that.
+    assert!(
+        report(lab.orchestrator.handle(Request::GetStatus).await)
+            .bundle
+            .is_none()
+    );
+
+    // Configs with something else beside them are refused, naming it.
+    let response = import(config_zip(&[("a.conf", &a), ("readme.txt", "hello")])).await;
+    let Response::ImportFailed { errors } = &response else {
+        panic!("expected a refusal, got {response:?}");
+    };
+    assert!(errors[0].starts_with("readme.txt"), "{errors:?}");
+    assert_eq!(std::fs::read_dir(lab.layout.bundles()).unwrap().count(), 1);
+}

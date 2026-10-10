@@ -25,7 +25,7 @@ use crate::rotation::State;
 /// Raised whenever a request, response or event is added or changed: a client and a service
 /// from different versions then refuse each other at `Hello` instead of failing later on a
 /// message one of them cannot parse.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 /// Largest line either side accepts: a maximal bundle in base64 plus the envelope.
 pub const MAX_FRAME_BYTES: usize = MAX_ZIP_BYTES / 3 * 4 + 64 * 1024;
 
@@ -55,6 +55,13 @@ pub enum Request {
     /// one with a new id; answered like an import.
     AddProfiles {
         bundle_id: String,
+        files: Vec<ProfileFile>,
+    },
+    /// Make a new bundle of these config files (SPEC §3.5), for a user whose provider hands
+    /// out single files. An empty `name` means "My servers". Answered like an import; the new
+    /// bundle also becomes the active one when none is.
+    CreateBundle {
+        name: String,
         files: Vec<ProfileFile>,
     },
     /// Remove servers from a bundle; it is replaced the same way.
@@ -204,13 +211,15 @@ impl Request {
             }
             Request::AddProfiles { bundle_id, files } => {
                 check_bundle_id(bundle_id)?;
-                if files.is_empty() || files.len() > crate::manifest::MAX_PROFILES {
+                check_files(files)
+            }
+            Request::CreateBundle { name, files } => {
+                if name.chars().count() > MAX_BUNDLE_NAME_CHARS {
                     return Err(IpcError::Invalid(format!(
-                        "between 1 and {} files can be added at once",
-                        crate::manifest::MAX_PROFILES
+                        "a bundle's name is at most {MAX_BUNDLE_NAME_CHARS} characters"
                     )));
                 }
-                files.iter().try_for_each(ProfileFile::validate)
+                check_files(files)
             }
             Request::RemoveProfiles {
                 bundle_id,
@@ -254,6 +263,19 @@ fn check_bundle_id(id: &str) -> Result<(), IpcError> {
             "bundle id must be 16 lowercase hex characters".into(),
         ))
     }
+}
+
+/// The manifest's limit on `bundle_name`, so a longer one is refused before a zip is built.
+const MAX_BUNDLE_NAME_CHARS: usize = 100;
+
+fn check_files(files: &[ProfileFile]) -> Result<(), IpcError> {
+    if files.is_empty() || files.len() > crate::manifest::MAX_PROFILES {
+        return Err(IpcError::Invalid(format!(
+            "between 1 and {} files can be added at once",
+            crate::manifest::MAX_PROFILES
+        )));
+    }
+    files.iter().try_for_each(ProfileFile::validate)
 }
 
 /// The manifest's own rule: ids become storage keys in the service, so nothing else is let in.
