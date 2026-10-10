@@ -85,7 +85,7 @@
           {name} installed on this PC. It was not found.
         </p>
       {/if}
-      {#if protocol === "openvpn"}
+      {#if protocol === "openvpn" && availability.status === "missing"}
         <p>
           <strong>OpenVPN Connect is a different program and cannot be used.</strong> It is what openvpn.net
           and the Microsoft Store offer first. TunnelHop needs the Community edition (version 2.x), which can
