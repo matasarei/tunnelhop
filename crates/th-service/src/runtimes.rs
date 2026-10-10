@@ -3,8 +3,11 @@
 //! A runtime that is missing, older than the minimum, or whose version cannot be read disables
 //! its protocol; the UI shows why.
 
+use std::collections::HashMap;
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::SystemTime;
 
 use th_core::ipc::{Availability, RuntimeInfo};
 use th_core::manifest::Protocol;
@@ -110,8 +113,53 @@ impl Runtime {
     }
 }
 
+/// What a runtime's file looked like when it was inspected: its path, size and time of change.
+type Stamp = (PathBuf, u64, Option<SystemTime>);
+
+/// Remembers the runtimes that were found but could not be used (too old, or a version that
+/// could not be read), so that looking again costs a file check: the version is read again,
+/// which for OpenVPN means running it, only once the file has changed.
+#[derive(Default)]
+pub struct Lookout {
+    seen: Mutex<HashMap<Protocol, (Stamp, Runtime)>>,
+}
+
+impl Lookout {
+    /// The runtime at `path`: what `inspect` finds, or what it found last time when the file
+    /// is the same and was not usable then.
+    pub fn look(
+        &self,
+        protocol: Protocol,
+        path: Option<&Path>,
+        inspect: impl FnOnce() -> Runtime,
+    ) -> Runtime {
+        let stamp = path.and_then(|path| {
+            let metadata = std::fs::metadata(path).ok()?;
+            metadata
+                .is_file()
+                .then(|| (path.to_path_buf(), metadata.len(), metadata.modified().ok()))
+        });
+        let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
+        if let (Some(stamp), Some((known, runtime))) = (&stamp, seen.get(&protocol))
+            && stamp == known
+        {
+            return runtime.clone();
+        }
+        let runtime = inspect();
+        match stamp {
+            Some(stamp) if !runtime.is_available() => {
+                seen.insert(protocol, (stamp, runtime.clone()));
+            }
+            _ => {
+                seen.remove(&protocol);
+            }
+        }
+        runtime
+    }
+}
+
 #[cfg(windows)]
-pub use discover::{discover, discover_one};
+pub use discover::{discover, discover_one, locate};
 
 #[cfg(windows)]
 mod discover {
@@ -139,21 +187,23 @@ mod discover {
 
     /// Look for one runtime: at start, and again later for one that was not usable then.
     pub fn discover_one(protocol: Protocol) -> Runtime {
+        let path = locate(protocol);
+        match protocol {
+            Protocol::Wireguard => runtime(protocol, path, |p| {
+                win::file_version(p).map(|(major, minor, patch)| Version::new(major, minor, patch))
+            }),
+            Protocol::Openvpn => runtime(protocol, path, openvpn_version),
+        }
+    }
+
+    /// Where a runtime's executable would be, whether or not it is there.
+    pub fn locate(protocol: Protocol) -> Option<PathBuf> {
         let program_files = win::program_files().ok();
         match protocol {
-            Protocol::Wireguard => {
-                let wireguard = program_files.map(|p| p.join("WireGuard").join("wireguard.exe"));
-                runtime(protocol, wireguard, |p| {
-                    win::file_version(p)
-                        .map(|(major, minor, patch)| Version::new(major, minor, patch))
-                })
-            }
-            Protocol::Openvpn => {
-                let openvpn = openvpn_from_registry().or_else(|| {
-                    program_files.map(|p| p.join("OpenVPN").join("bin").join("openvpn.exe"))
-                });
-                runtime(protocol, openvpn, openvpn_version)
-            }
+            Protocol::Wireguard => program_files.map(|p| p.join("WireGuard").join("wireguard.exe")),
+            Protocol::Openvpn => openvpn_from_registry().or_else(|| {
+                program_files.map(|p| p.join("OpenVPN").join("bin").join("openvpn.exe"))
+            }),
         }
     }
 
@@ -212,6 +262,48 @@ mod discover {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_unusable_runtime_is_inspected_again_only_when_its_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("openvpn.exe");
+        let looks = std::cell::Cell::new(0);
+        let lookout = Lookout::default();
+        let found = |found: Found| {
+            let runtime = Runtime {
+                protocol: Protocol::Openvpn,
+                availability: availability(&found, MIN_OPENVPN),
+                path: path.is_file().then(|| path.clone()),
+            };
+            lookout.look(Protocol::Openvpn, Some(&path), || {
+                looks.set(looks.get() + 1);
+                runtime
+            })
+        };
+        let old = Found::Installed(Some(Version::new(2, 5, 0)));
+
+        // Missing: there is nothing to remember, so every look inspects.
+        assert_eq!(found(Found::Missing).availability, Availability::Missing);
+        assert_eq!(found(Found::Missing).availability, Availability::Missing);
+        assert_eq!(looks.get(), 2);
+
+        // Too old: inspected once, then answered from memory while the file stays the same.
+        std::fs::write(&path, b"old").unwrap();
+        let first = found(old.clone());
+        assert!(matches!(first.availability, Availability::TooOld { .. }));
+        assert_eq!(found(Found::Installed(Some(MIN_OPENVPN))), first);
+        assert_eq!(looks.get(), 3);
+
+        // Replaced by a newer one (another size): inspected again, and no longer remembered.
+        std::fs::write(&path, b"newer").unwrap();
+        assert!(found(Found::Installed(Some(MIN_OPENVPN))).is_available());
+        assert_eq!(looks.get(), 4);
+        assert!(matches!(
+            found(old).availability,
+            Availability::TooOld { .. }
+        ));
+        assert_eq!(looks.get(), 5);
+    }
 
     #[test]
     fn versions_parse_with_two_or_three_parts_and_ignore_suffixes() {

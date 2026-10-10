@@ -27,7 +27,7 @@ use crate::logging;
 use crate::orchestrator::{Discover, Orchestrator, Parts};
 use crate::pipe::{Listener, PIPE_NAME};
 use crate::probe::HttpProbe;
-use crate::runtimes::{self, Runtime};
+use crate::runtimes::{self, Lookout, Runtime};
 use crate::store::{self, Layout, Settings};
 
 pub const SERVICE_NAME: &str = "TunnelHop";
@@ -235,8 +235,13 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
     // A runtime installed or updated while the service runs is picked up without a restart.
     let discover: Discover = {
         let layout = layout.clone();
+        // One that is there but too old is not inspected again until its file changes.
+        let lookout = Lookout::default();
         Arc::new(move |protocol| {
-            let found = runtimes::discover_one(protocol);
+            let path = runtimes::locate(protocol);
+            let found = lookout.look(protocol, path.as_deref(), || {
+                runtimes::discover_one(protocol)
+            });
             let driver = if found.is_available() {
                 driver_for(&found, &layout)
                     .map_err(|e| {
