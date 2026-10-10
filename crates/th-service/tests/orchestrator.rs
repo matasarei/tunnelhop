@@ -935,6 +935,42 @@ async fn removing_the_server_in_use_moves_to_another_with_the_block_held() {
 }
 
 #[tokio::test]
+async fn an_edit_tries_the_same_server_once_and_then_rotates() {
+    let log = CallLog::default();
+    let driver = Arc::new(MockDriver::new(log.clone()));
+    let lab = lab_with(tempfile::tempdir().unwrap(), false, log, driver.clone()).await;
+    let old = imported_and_selected(&lab).await;
+    connect(&lab, "wg-a").await;
+    driver.fail_connect("wg-a");
+    lab.log.take();
+
+    edited(add(&lab, &old, "nl.conf", &wireguard("198.51.100.20:51820")).await);
+
+    let log = lab.log.take();
+    assert!(!log.contains(&"disengage".to_string()), "{log:?}");
+    let tries = log.iter().filter(|e| *e == "connect:wg-a").count();
+    assert!(tries >= 1, "{log:?}");
+    let first_other = log
+        .iter()
+        .position(|e| e == "connect:wg-b" || e == "connect:nl")
+        .expect("it moved on");
+    let second_try = log
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| *e == "connect:wg-a")
+        .nth(1)
+        .map(|(i, _)| i);
+    assert!(
+        second_try.is_none_or(|i| i > first_other),
+        "another server was tried before wg-a a second time: {log:?}"
+    );
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Connected);
+    assert_ne!(status.profile_id.as_deref(), Some("wg-a"));
+    assert!(status.killswitch_engaged);
+}
+
+#[tokio::test]
 async fn an_edit_that_cannot_reconnect_ends_blocked_not_open() {
     let log = CallLog::default();
     let driver = Arc::new(MockDriver::new(log.clone()));

@@ -21,7 +21,6 @@ use th_core::driver::{ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelHand
 use th_core::edit::{self, Edit, NewProfile};
 use th_core::ipc::{self, BundleInfo, Event, Request, Response, RuntimeInfo, StatusReport};
 use th_core::manifest::Protocol;
-use th_core::rotation::RotationError;
 use th_core::rotation::{KillSwitch, Overrides, Probe, Resolver, Rotator, State, Status, Trigger};
 use th_core::sanitize::Endpoint;
 use th_core::tunnel_name::tunnel_name;
@@ -620,18 +619,10 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             return;
         }
         let active = inner.active.as_mut().expect("set above");
-        let mut result = match &same {
-            Some(id) => active.rotator.connect_to(id, now).await,
+        let result = match &same {
+            Some(id) => active.rotator.reconnect_or_rotate(id, now).await,
             None => active.rotator.rotate(Trigger::Manual, now).await,
         };
-        if same.is_some()
-            && matches!(
-                result,
-                Err(RotationError::Exhausted(_) | RotationError::NoCandidates(_))
-            )
-        {
-            result = active.rotator.rotate(Trigger::Manual, now).await;
-        }
         // Publishes, and alerts when the edit ended blocked.
         self.finish(inner, result);
     }
