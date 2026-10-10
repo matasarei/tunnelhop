@@ -197,7 +197,8 @@ OpenVPN, with `port` and `proto` defaults applied) are extracted at import for t
 - **Editing servers.** A bundle stays immutable: its id is the hash of its zip. Adding or removing
   servers therefore produces a **new bundle**, which replaces the old one:
   1. **Add:** the user gives one or more `.conf` (WireGuard) or `.ovpn` (OpenVPN) files, the
-     protocol following the extension, each with a display name (default: the file name). The
+     protocol following the extension, each with a display name (default: the file name
+     without its extension). The
      profile id is derived from the file name, made to match `^[a-z0-9-]{1,40}$` and unique
      within the bundle (`-2`, `-3`, … on a clash). A protocol not yet in an explicit
      `protocols` list is added to it.
@@ -209,8 +210,11 @@ OpenVPN, with `port` and `proto` defaults applied) are extracted at import for t
      own. A profile added with a bare `auth-user-pass` asks for credentials like an imported
      one (§3.4).
   5. The old bundle is deleted. If it was active, the new one becomes active. If a tunnel was
-     up, the service rotates into the new bundle without lifting the kill-switch: an edit never
-     opens a window for traffic outside the tunnel.
+     up, the service moves to a tunnel of the new bundle without lifting the kill-switch: an
+     edit never opens a window for traffic outside the tunnel. It reconnects to the same server
+     when that server is still in the bundle, so that adding a server does not change the
+     public IP; it rotates to another only when the server was removed or one attempt to
+     reconnect fails.
 - The UI never reads a bundle's files (they hold private keys); it sends the new files' bytes
   and receives the result, as an import does.
 
