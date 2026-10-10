@@ -48,6 +48,12 @@ export const protocolName: Record<Protocol, string> = {
   openvpn: "OpenVPN",
 };
 
+/** The program each protocol needs on this PC. OpenVPN Connect is another program entirely. */
+export const runtimeName: Record<Protocol, string> = {
+  wireguard: "WireGuard",
+  openvpn: "OpenVPN Community",
+};
+
 export const status = () => invoke<Report | null>("status");
 export const intervals = () => invoke<[number, string][]>("intervals");
 export const act = (action: Action) => invoke<void>("act", { action });
@@ -95,9 +101,11 @@ export const setCredentials = (
 /** Why a profile's protocol cannot be used on this PC, or null when it can. */
 export function runtimeProblem(report: Report, protocol: Protocol): string | null {
   const runtime = report.runtimes.find((r) => r.protocol === protocol)?.availability;
-  const name = protocolName[protocol];
+  const name = runtimeName[protocol];
   if (!runtime || runtime.status === "missing") return `${name} is not installed`;
+  if (runtime.status === "too_old" && runtime.found === "unknown")
+    return `${name} could not be checked (${runtime.required} or newer is needed)`;
   if (runtime.status === "too_old")
-    return `${name} ${runtime.found} is too old (${runtime.required} or newer is needed)`;
+    return`${name} ${runtime.found} is too old (${runtime.required} or newer is needed)`;
   return null;
 }
