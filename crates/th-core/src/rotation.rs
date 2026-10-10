@@ -179,6 +179,11 @@ impl Rotator {
         }
     }
 
+    /// A runtime installed after the engine was built: its profiles become candidates.
+    pub fn add_driver(&mut self, protocol: Protocol, driver: Arc<dyn VpnDriver>) {
+        self.drivers.insert(protocol, driver);
+    }
+
     /// Profiles that cannot connect until the user gives credentials. They are never picked
     /// for rotation, and connecting to one by name is refused. Replaces the previous set.
     pub fn set_missing_credentials(&mut self, profile_ids: HashSet<String>) {

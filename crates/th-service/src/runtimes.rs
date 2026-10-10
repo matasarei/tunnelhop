@@ -111,7 +111,7 @@ impl Runtime {
 }
 
 #[cfg(windows)]
-pub use discover::discover;
+pub use discover::{discover, discover_one};
 
 #[cfg(windows)]
 mod discover {
@@ -131,21 +131,30 @@ mod discover {
 
     /// Look for both runtimes. Never fails: a problem shows up as that runtime's availability.
     pub fn discover() -> Vec<Runtime> {
-        let program_files = win::program_files().ok();
-        let wireguard = program_files
-            .as_ref()
-            .map(|p| p.join("WireGuard").join("wireguard.exe"));
-        let openvpn = openvpn_from_registry().or_else(|| {
-            program_files
-                .as_ref()
-                .map(|p| p.join("OpenVPN").join("bin").join("openvpn.exe"))
-        });
         vec![
-            runtime(Protocol::Wireguard, wireguard, |p| {
-                win::file_version(p).map(|(major, minor, patch)| Version::new(major, minor, patch))
-            }),
-            runtime(Protocol::Openvpn, openvpn, openvpn_version),
+            discover_one(Protocol::Wireguard),
+            discover_one(Protocol::Openvpn),
         ]
+    }
+
+    /// Look for one runtime: at start, and again later for one that was not usable then.
+    pub fn discover_one(protocol: Protocol) -> Runtime {
+        let program_files = win::program_files().ok();
+        match protocol {
+            Protocol::Wireguard => {
+                let wireguard = program_files.map(|p| p.join("WireGuard").join("wireguard.exe"));
+                runtime(protocol, wireguard, |p| {
+                    win::file_version(p)
+                        .map(|(major, minor, patch)| Version::new(major, minor, patch))
+                })
+            }
+            Protocol::Openvpn => {
+                let openvpn = openvpn_from_registry().or_else(|| {
+                    program_files.map(|p| p.join("OpenVPN").join("bin").join("openvpn.exe"))
+                });
+                runtime(protocol, openvpn, openvpn_version)
+            }
+        }
     }
 
     fn runtime(

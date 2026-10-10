@@ -24,7 +24,7 @@ use crate::drivers::openvpn::{CredentialLookup, OpenvpnDriver};
 use crate::drivers::wireguard::WireguardDriver;
 use crate::killswitch::WfpKillSwitch;
 use crate::logging;
-use crate::orchestrator::{Orchestrator, Parts};
+use crate::orchestrator::{Discover, Orchestrator, Parts};
 use crate::pipe::{Listener, PIPE_NAME};
 use crate::probe::HttpProbe;
 use crate::runtimes::{self, Runtime};
@@ -228,20 +228,27 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
 
     let mut drivers: HashMap<Protocol, Arc<dyn VpnDriver>> = HashMap::new();
     for runtime_found in &runtimes {
-        if runtime_found.protocol == Protocol::Wireguard && runtime_found.is_available() {
-            let driver = WireguardDriver::new(runtime_found, layout.tunnels())?;
-            drivers.insert(Protocol::Wireguard, Arc::new(driver));
-        }
-        if runtime_found.protocol == Protocol::Openvpn && runtime_found.is_available() {
-            // The driver answers OpenVPN's credential prompts from the same store.
-            let store = CredentialStore::new(layout.credentials(), Dpapi);
-            let lookup: CredentialLookup = Arc::new(move |bundle, profile| {
-                store.get(bundle, profile).map_err(|e| e.to_string())
-            });
-            let driver = OpenvpnDriver::new(runtime_found, &layout, lookup)?;
-            drivers.insert(Protocol::Openvpn, Arc::new(driver));
+        if runtime_found.is_available() {
+            drivers.insert(runtime_found.protocol, driver_for(runtime_found, &layout)?);
         }
     }
+    // A runtime installed or updated while the service runs is picked up without a restart.
+    let discover: Discover = {
+        let layout = layout.clone();
+        Arc::new(move |protocol| {
+            let found = runtimes::discover_one(protocol);
+            let driver = if found.is_available() {
+                driver_for(&found, &layout)
+                    .map_err(|e| {
+                        log::error!("{protocol:?} was found but its driver could not start: {e}")
+                    })
+                    .ok()
+            } else {
+                None
+            };
+            (found.info(), driver)
+        })
+    };
     let killswitch_engaged = WfpKillSwitch::is_engaged().unwrap_or_else(|e| {
         log::error!("cannot tell whether the kill-switch is engaged: {e}");
         false
@@ -256,6 +263,7 @@ fn start(failures: mpsc::Sender<Stop>) -> Result<Running, Box<dyn Error>> {
         settings,
         runtimes: runtimes.iter().map(Runtime::info).collect(),
         drivers,
+        discover: Some(discover),
         killswitch: Arc::new(WfpKillSwitch::new()),
         killswitch_engaged,
         probe: Arc::new(probe),
@@ -299,6 +307,21 @@ fn not_registered(error: &windows_service::Error) -> bool {
     const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
     matches!(error, windows_service::Error::Winapi(e)
         if e.raw_os_error() == Some(ERROR_SERVICE_DOES_NOT_EXIST))
+}
+
+/// The driver for a runtime that was found and is new enough.
+fn driver_for(found: &Runtime, layout: &Layout) -> Result<Arc<dyn VpnDriver>, Box<dyn Error>> {
+    Ok(match found.protocol {
+        Protocol::Wireguard => Arc::new(WireguardDriver::new(found, layout.tunnels())?),
+        Protocol::Openvpn => {
+            // The driver answers OpenVPN's credential prompts from the same store.
+            let store = CredentialStore::new(layout.credentials(), Dpapi);
+            let lookup: CredentialLookup = Arc::new(move |bundle, profile| {
+                store.get(bundle, profile).map_err(|e| e.to_string())
+            });
+            Arc::new(OpenvpnDriver::new(found, layout, lookup)?)
+        }
+    })
 }
 
 /// Stop the service and wait until it has: its stop handler disconnects and lifts the block.
