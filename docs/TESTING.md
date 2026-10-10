@@ -29,6 +29,19 @@ The installer carries the app (`th-app.exe`) and the service (`th-service.exe`, 
 the same command with default features, so without the dev safety timer). It installs per
 machine and asks for elevation; the app itself never runs elevated.
 
+### Seeing the app in another language
+
+The app follows Windows' display language. To see one without changing Windows, set
+`TUNNELHOP_LANG` to a file name under `app\locales` (`uk`, `de`, `ja`, ...) for the user and
+start the app again:
+
+```powershell
+setx TUNNELHOP_LANG uk        # then start the app; `setx TUNNELHOP_LANG ""` and
+                              # `reg delete HKCU\Environment /v TUNNELHOP_LANG /f` undo it
+```
+
+Service messages stay English in every language (SPEC §5).
+
 ## 3. The installer pass (plan step 19)
 
 From the `clean` checkpoint (Windows with WireGuard and OpenVPN, no TunnelHop):
