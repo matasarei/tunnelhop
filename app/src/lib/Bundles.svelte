@@ -15,6 +15,10 @@
   } = $props();
 
   const servers = (count: number) => (count === 1 ? "1 server" : `${count} servers`);
+  // Bundles may share a name (a provider's file downloaded twice): those also show their id.
+  const shared = $derived(
+    new Set(list.bundles.map((b) => b.bundle_name).filter((name, i, all) => all.indexOf(name) !== i)),
+  );
 </script>
 
 <section class="card rows">
@@ -22,7 +26,9 @@
     <div class="row">
       <div class="who">
         <div class="name">{bundle.bundle_name}</div>
-        <div class="hint">{servers(bundle.profiles.length)}</div>
+        <div class="hint">
+          {servers(bundle.profiles.length)}{#if shared.has(bundle.bundle_name)}&nbsp;· {bundle.bundle_id.slice(0, 8)}{/if}
+        </div>
       </div>
       <div class="what">
         {#if bundle.bundle_id === list.active}
