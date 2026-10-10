@@ -58,6 +58,14 @@ export const importBundle = (path?: string) =>
 
 export const selectBundle = (bundleId: string) => invoke<void>("select_bundle", { bundleId });
 
+/** Every installed bundle, ordered by name, and the id of the active one. */
+export type BundleList = { bundles: Bundle[]; active: string | null };
+
+export const listBundles = () => invoke<BundleList>("list_bundles");
+
+/** Delete a bundle and its saved sign-in; the list that is left comes back. */
+export const deleteBundle = (bundleId: string) => invoke<BundleList>("delete_bundle", { bundleId });
+
 /** For the listed profiles, or as the bundle's default for every one when the list is empty. */
 export const setCredentials = (
   bundleId: string,

@@ -2,16 +2,17 @@
   // The window: the service's state, the same controls as the tray, the bundle's servers, and
   // bundle import, in Fluent 2 (the design system of Windows 11). Every control sends a request;
   // what the window shows changes only with the service's next report, so it never shows
-  // something the service did not do. Bundle management and editing servers arrive with steps
-  // 27 and 28.
+  // something the service did not do. Editing a bundle's servers arrives with step 28.
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
   import { onMount } from "svelte";
+  import Bundles from "$lib/Bundles.svelte";
+  import Confirm from "$lib/Confirm.svelte";
   import Credentials from "$lib/Credentials.svelte";
   import Servers from "$lib/Servers.svelte";
   import { followSystemTheme } from "$lib/fluent";
   import * as ipc from "$lib/ipc";
-  import type { Action, Bundle, Profile, Report } from "$lib/ipc";
+  import type { Action, Bundle, BundleList, Profile, Report } from "$lib/ipc";
 
   let report = $state<Report | null>(null);
   let intervals = $state<[number, string][]>([]);
@@ -26,14 +27,34 @@
   /** The credentials dialog: for a whole bundle (profile null) or one server. */
   let asking = $state<{ bundle: Bundle; profile: Profile | null } | null>(null);
   let dragging = $state(false);
+  /** The installed bundles; null while the service cannot be asked. */
+  let bundles = $state<BundleList | null>(null);
+  /** A question waiting for a yes or a no. */
+  let confirming = $state<{ title: string; message: string; action: string; run: () => void } | null>(null);
+
+  /** Ask for the installed bundles again. Status reports carry only the active one. */
+  async function refreshBundles() {
+    try {
+      bundles = await ipc.listBundles();
+    } catch {
+      bundles = null;
+    }
+  }
 
   onMount(() => {
     const stopTheme = followSystemTheme();
-    ipc.status().then((r) => (report = r));
+    ipc.status().then((r) => {
+      report = r;
+      refreshBundles();
+    });
     ipc.intervals().then((list) => (intervals = list));
     const unlisten = [
       listen<Report | null>("status", (e) => {
+        const before = report;
         report = e.payload;
+        // The service came or went, or another bundle is active: the list may have changed.
+        if ((before === null) !== (report === null) || before?.bundle?.bundle_id !== report?.bundle?.bundle_id)
+          refreshBundles();
         // A tunnel up again answers the last alert.
         if (e.payload?.state === "connected") alert = null;
         // The bundle waiting for "Switch now" became the active one some other way.
@@ -102,12 +123,45 @@
       if (report?.state === "disconnected") await run(() => ipc.selectBundle(bundle.bundle_id));
       else pendingSwitch = bundle;
     }
+    refreshBundles();
     if (outcome.needs_credentials.length > 0) asking = { bundle, profile: null };
   }
 
   async function switchTo(bundle: Bundle) {
     pendingSwitch = null;
     await run(() => ipc.selectBundle(bundle.bundle_id));
+  }
+
+  const leavesTunnel = "The current tunnel is disconnected and the block is lifted first.";
+
+  /** Switch from the bundles list: asked about first when it would drop a tunnel or a block. */
+  function askSwitch(bundle: Bundle) {
+    if (!engaged) return void switchTo(bundle);
+    confirming = {
+      title: `Switch to "${bundle.bundle_name}"?`,
+      message: `${leavesTunnel} Traffic is not protected until you connect again.`,
+      action: "Switch",
+      run: () => switchTo(bundle),
+    };
+  }
+
+  function askDelete(bundle: Bundle) {
+    const inUse = bundles?.active === bundle.bundle_id && engaged;
+    confirming = {
+      title: `Delete "${bundle.bundle_name}"?`,
+      message: `${inUse ? `${leavesTunnel} ` : ""}Its servers and saved sign-in are removed from this PC. This cannot be undone.`,
+      action: "Delete",
+      run: () => remove(bundle),
+    };
+  }
+
+  async function remove(bundle: Bundle) {
+    notice = null;
+    const left = await run(() => ipc.deleteBundle(bundle.bundle_id));
+    if (!left) return void refreshBundles();
+    bundles = left;
+    notice = `Deleted "${bundle.bundle_name}".`;
+    if (pendingSwitch?.bundle_id === bundle.bundle_id) pendingSwitch = null;
   }
 
   const reachable = $derived(report !== null);
@@ -220,21 +274,28 @@
     {#if busy}<fluent-spinner size="tiny" aria-label="Working"></fluent-spinner>{/if}
   </div>
 
-  <div class="heading">
-    <h2>{report?.bundle ? `Servers in ${report.bundle.bundle_name}` : "Servers"}</h2>
-    <fluent-button size="small" disabled={!reachable || busy} onclick={() => importFrom()}>Import bundle…</fluent-button>
-  </div>
   {#if report?.bundle}
+    <h2>Servers in {report.bundle.bundle_name}</h2>
     <Servers
       {report}
       {busy}
       onconnect={(profile) => act({ type: "connect", profile_id: profile.id })}
       oncredentials={(profile) => report?.bundle && (asking = { bundle: report.bundle, profile })}
     />
-  {:else}
+  {/if}
+
+  <div class="heading">
+    <h2>Bundles</h2>
+    <fluent-button size="small" disabled={!reachable || busy} onclick={() => importFrom()}>Import bundle…</fluent-button>
+  </div>
+  {#if bundles && bundles.bundles.length > 0}
+    <Bundles list={bundles} {busy} onswitch={askSwitch} ondelete={askDelete} />
+  {:else if reachable}
     <section class="card empty">
       No bundle yet. Import a bundle <code>.zip</code> from your VPN provider, or drop it on this window.
     </section>
+  {:else}
+    <section class="card empty">The installed bundles appear here once the service is running.</section>
   {/if}
 
   <h2>Details</h2>
@@ -287,6 +348,20 @@
 
 {#if asking}
   <Credentials bundle={asking.bundle} profile={asking.profile} onclose={() => (asking = null)} />
+{/if}
+
+{#if confirming}
+  {@const question = confirming}
+  <Confirm
+    title={question.title}
+    message={question.message}
+    action={question.action}
+    onconfirm={() => {
+      confirming = null;
+      question.run();
+    }}
+    oncancel={() => (confirming = null)}
+  />
 {/if}
 
 {#if dragging}
