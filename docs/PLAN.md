@@ -484,6 +484,9 @@ step (or per closely related pair), opened as a PR against `main`.
     user whose provider hands out single files, not a zip, cannot start at all.
     - With no bundle in use, the chosen files become a new bundle, which is then the one in
       use. With a bundle in use nothing changes: the files are added to it (step 28).
+    - A zip with no `manifest.json` that holds only `.conf`/`.ovpn` files (what a user gets
+      by zipping those files by hand) is treated as the same loose files, at any folder depth,
+      instead of being refused entry by entry. Anything else in such a zip still refuses it.
     - Core: `edit::create(name, files)` builds the manifest and the zip from nothing, with the
       same file checks, ids and deterministic zip as `edit::rebuild`. The ordinary import then
       judges the configs, so a hostile file is refused exactly as in a provider's zip.
