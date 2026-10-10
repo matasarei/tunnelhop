@@ -199,7 +199,10 @@ OpenVPN, with `port` and `proto` defaults applied) are extracted at import for t
   1. With no bundle active, the files the user gives (as for **Add** below) become a new
      bundle with a name the user chooses (default "My servers"). The service builds its
      manifest and zip, imports it through §3.3 and §3.4 unchanged, and makes it the active
-     bundle. With a bundle active, the files are added to that bundle instead.
+     bundle, unless a block left by a crash is in place: then it is only installed, since
+     selecting would lift the block. With a bundle active, the window adds the files to that
+     bundle instead; a `CreateBundle` request sent then (`ctl create`) installs the new
+     bundle beside it and leaves the active one and its tunnel alone.
   2. An imported zip with no `manifest.json` that holds `.conf`/`.ovpn` files is treated as
      those files, whatever folders they sit in, and becomes a bundle called "My servers". Any
      other file in such a zip refuses it. The archive limits of §3.3 apply.
