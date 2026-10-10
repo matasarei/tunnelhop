@@ -303,18 +303,25 @@ fn not_registered(error: &windows_service::Error) -> bool {
 
 /// Stop the service and wait until it has: its stop handler disconnects and lifts the block.
 fn stop_and_wait(service: &Service) -> Result<(), Box<dyn Error>> {
-    if service.query_status()?.current_state == ServiceState::Stopped {
-        return Ok(());
-    }
-    service.stop()?;
     let started = Instant::now();
-    while service.query_status()?.current_state != ServiceState::Stopped {
+    let mut asked = false;
+    loop {
+        match service.query_status()?.current_state {
+            ServiceState::Stopped => return Ok(()),
+            // A service that is still starting, or already stopping, refuses a stop: wait
+            // until it has settled.
+            ServiceState::StartPending | ServiceState::StopPending => {}
+            _ if !asked => {
+                service.stop()?;
+                asked = true;
+            }
+            _ => {}
+        }
         if started.elapsed() > STOP_TIMEOUT {
             return Err(format!("{SERVICE_NAME} did not stop within 30 s").into());
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    Ok(())
 }
 
 /// Wait until a service that was just started is running.
