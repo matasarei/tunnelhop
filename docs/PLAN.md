@@ -582,9 +582,23 @@ step (or per closely related pair), opened as a PR against `main`.
       open the tray; their text has unit tests), the other six languages on screen, a
       Windows whose display language is one of the nine, dark theme. The translations were
       written without a native speaker's review.
-33. [ ] The installer in the same ten languages: Tauri's NSIS `languages`, and TunnelHop's
-    own messages in `hooks.nsh` as `LangString`s. Open: whether Tauri ships Ukrainian,
-    Polish and Italian for its standard pages.
+33. [x] The installer in the same ten languages, taken from Windows as the app's is.
+    - Landed: `languages` in `tauri.installer.conf.json` (no selector);
+      `app/src-tauri/windows/messages.nsh` (TunnelHop's four progress lines and two
+      warnings, per language); `windows/Polish.nsh` (Tauri ships its own pages for nine of
+      the ten, not for Polish); `hooks.nsh` uses them; SPEC §5; TESTING §3.
+    - Ruling: the hook texts are chosen at run time by `$LANGUAGE`, not as `LangString`s.
+      Tauri reads `hooks.nsh` before it loads the languages, where a `LangString` cannot
+      name one.
+    - Ruling: the command under each warning is not translated; it is typed as it stands.
+    - Checked in `th-test` (2026-10-11): silent install, install over it and uninstall, each
+      exit 0, service running and then nothing left. Then with the Ukrainian language pack
+      and Ukrainian as the display language: the installer's welcome, folder, progress and
+      finish pages in Ukrainian, and the app it started in Ukrainian with no
+      `TUNNELHOP_LANG` set, which also shows step 32's choice working from Windows itself.
+    - Not checked: TunnelHop's own lines and warnings on screen in any language but English
+      (they show in the details list and on a failure; the keyboard could not open either),
+      the uninstaller on screen, and the other eight languages.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
