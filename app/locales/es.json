@@ -27,6 +27,10 @@
   "file.bundle_too_large": "{name} supera los 20 MB, el máximo para un paquete",
   "file.config_too_large": "{name} supera 1 MB, el máximo para una configuración",
   "file.read_failed": "No se pudieron leer los archivos: {reason}",
+  "client.not_running": "El servicio de TunnelHop no está en ejecución",
+  "client.closing": "La aplicación se está cerrando",
+  "client.lost": "Se perdió la conexión con el servicio",
+  "client.unexpected": "El servicio dio una respuesta inesperada: {answer}",
 
   "status.connected": "Conectado",
   "status.hint.unreachable": "Inicie el servicio de TunnelHop para conectarse.",

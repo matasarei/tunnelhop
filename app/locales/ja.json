@@ -27,6 +27,10 @@
   "file.bundle_too_large": "{name} はバンドルの上限である 20 MB を超えています",
   "file.config_too_large": "{name} は構成ファイルの上限である 1 MB を超えています",
   "file.read_failed": "ファイルを読み取れませんでした: {reason}",
+  "client.not_running": "TunnelHop サービスが実行されていません",
+  "client.closing": "アプリを終了しています",
+  "client.lost": "サービスとの接続が失われました",
+  "client.unexpected": "サービスから予期しない応答がありました: {answer}",
 
   "status.connected": "接続済み",
   "status.hint.unreachable": "接続するには TunnelHop サービスを開始してください。",

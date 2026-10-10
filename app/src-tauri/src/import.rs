@@ -68,7 +68,10 @@ pub fn outcome(response: Response) -> Result<ImportOutcome, String> {
         }),
         Response::ImportFailed { errors } => Ok(ImportOutcome::Refused { errors }),
         Response::Error { message } => Err(message),
-        other => Err(format!("the service answered an import with {other:?}")),
+        other => Err(text(
+            "client.unexpected",
+            &[("answer", &format!("{other:?}"))],
+        )),
     }
 }
 

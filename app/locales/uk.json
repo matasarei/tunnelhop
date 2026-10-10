@@ -27,6 +27,10 @@
   "file.bundle_too_large": "{name} більший за 20 МБ — це найбільший розмір набору",
   "file.config_too_large": "{name} більший за 1 МБ — це найбільший розмір конфігурації",
   "file.read_failed": "Не вдалося прочитати файли: {reason}",
+  "client.not_running": "Службу TunnelHop не запущено",
+  "client.closing": "Застосунок завершує роботу",
+  "client.lost": "З’єднання зі службою втрачено",
+  "client.unexpected": "Служба дала неочікувану відповідь: {answer}",
 
   "status.connected": "Підключено",
   "status.hint.unreachable": "Запустіть службу TunnelHop, щоб підключитися.",

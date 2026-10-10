@@ -5,7 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use th_app_lib::pipe_client::{NOT_RUNNING, Options, ServiceClient, Update};
+use th_app_lib::pipe_client::{NOT_RUNNING, Options, ServiceClient, Update, not_running};
 use th_core::ipc::{Event, Request, Response};
 use th_service::pipe::{Handler, Listener};
 use tokio::sync::{broadcast, mpsc};
@@ -128,7 +128,7 @@ async fn a_missing_service_is_reported_and_the_client_reconnects_when_it_returns
     let answer = timeout(Duration::from_secs(1), client.request(Request::GetStatus))
         .await
         .expect("answered without waiting for the service");
-    assert_eq!(answer, Err(NOT_RUNNING.into()));
+    assert_eq!(answer, Err(not_running()));
 
     let server = serve(&name);
     loop {
