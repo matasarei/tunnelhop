@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: &str = "1";
 pub const MAX_PROFILES: usize = 500;
-const MAX_NAME_CHARS: usize = 100;
+/// The most characters in a bundle's name or a profile's.
+pub const MAX_NAME_CHARS: usize = 100;
 const MAX_ID_CHARS: usize = 40;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -11,15 +11,17 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, DateTime, ZipWriter};
+use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
-use crate::bundle::{self, BundleId, ImportError, MANIFEST_FILE};
-use crate::manifest::{MAX_PROFILES, Manifest, Profile, Protocol};
+use crate::bundle::{self, BundleId, ImportError, MANIFEST_FILE, MAX_ZIP_BYTES};
+use crate::manifest::{MAX_PROFILES, Manifest, Profile, Protocol, Rotation, SCHEMA_VERSION};
 use crate::tunnel_name::is_dos_device_name;
 
 /// The largest config file an edit may add. Real ones are a few kilobytes.
 pub const MAX_CONFIG_BYTES: usize = 1024 * 1024;
 const MAX_ID_CHARS: usize = 40;
+/// What a bundle made from config files is called when the user gives no name.
+pub const DEFAULT_BUNDLE_NAME: &str = "My servers";
 
 /// One config file to add as a server.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,15 +114,91 @@ pub fn rebuild(root: &Path, id: &BundleId, edit: &Edit) -> Result<Vec<u8>, Vec<I
         Edit::Remove(ids) => remove(&mut manifest, &mut files, ids)?,
     }
 
+    pack(&manifest, files)
+}
+
+/// The zip of a new bundle called `name` ("My servers" when empty) made of these config
+/// files, for the caller to import: how a user whose provider hands out single files, not a
+/// bundle, gets one. The same checks, ids and bytes as an added server gets.
+pub fn create(name: &str, new: &[NewProfile]) -> Result<Vec<u8>, Vec<ImportError>> {
+    let name = match name.trim() {
+        "" => DEFAULT_BUNDLE_NAME,
+        name => name,
+    };
+    let mut manifest = Manifest {
+        schema_version: SCHEMA_VERSION.to_string(),
+        bundle_name: name.to_string(),
+        protocols: None,
+        rotation: Rotation::default(),
+        profiles: Vec::new(),
+    };
+    let mut files = Vec::new();
+    add(&mut manifest, &mut files, new)?;
+    pack(&manifest, files)
+}
+
+/// When `zip_bytes` is a zip of bare config files (no `manifest.json` anywhere, at least one
+/// `.conf` or `.ovpn`), the bundle zip [`create`] makes of them; `None` for anything else, which is
+/// the import's to judge. The files may sit in folders: only their own names are used.
+pub fn from_config_zip(zip_bytes: &[u8]) -> Option<Result<Vec<u8>, Vec<ImportError>>> {
+    if zip_bytes.len() > MAX_ZIP_BYTES {
+        return None;
+    }
+    let archive = ZipArchive::new(Cursor::new(zip_bytes)).ok()?;
+    // A manifest anywhere means a bundle was meant (zipped one folder too deep, say): the
+    // import's own errors describe that better than "only config files" would.
+    if archive
+        .file_names()
+        .any(|name| base_name(name).eq_ignore_ascii_case(MANIFEST_FILE))
+        || !archive
+            .file_names()
+            .any(|name| protocol_of(base_name(name)).is_some())
+    {
+        return None;
+    }
+    Some(
+        bundle::read_entries(zip_bytes, check_config_entry).and_then(|entries| {
+            // In the archive's name order, which a `BTreeMap` already gives.
+            let new: Vec<NewProfile> = entries
+                .into_iter()
+                .map(|(path, content)| NewProfile {
+                    name: String::new(),
+                    file_name: base_name(&path).to_string(),
+                    content,
+                })
+                .collect();
+            create(DEFAULT_BUNDLE_NAME, &new)
+        }),
+    )
+}
+
+/// An entry's own name, whichever separator the tool that made the zip wrote.
+fn base_name(entry: &str) -> &str {
+    entry.rsplit(['/', '\\']).next().unwrap_or(entry)
+}
+
+/// In a zip of bare configs every file is one; folders are only passed through.
+fn check_config_entry(name: &str) -> Result<(), &'static str> {
+    if name.ends_with(['/', '\\']) || protocol_of(base_name(name)).is_some() {
+        Ok(())
+    } else {
+        Err("a zip without manifest.json may hold only .conf and .ovpn files")
+    }
+}
+
+fn pack(
+    manifest: &Manifest,
+    mut files: Vec<(String, Vec<u8>)>,
+) -> Result<Vec<u8>, Vec<ImportError>> {
     let mut entries = vec![(
         MANIFEST_FILE.to_string(),
-        serde_json::to_vec_pretty(&manifest).expect("a manifest always serializes"),
+        serde_json::to_vec_pretty(manifest).expect("a manifest always serializes"),
     )];
     files.sort();
     entries.extend(files);
     write_zip(&entries).map_err(|e| {
         vec![ImportError::archive(format!(
-            "could not rebuild the bundle: {e}"
+            "could not build the bundle: {e}"
         ))]
     })
 }

@@ -1,6 +1,7 @@
 <script lang="ts">
-  // The config files about to become servers of a bundle (SPEC §3.5), each with the name it
-  // will show under. Nothing has been read yet: the files are read when Add is pressed.
+  // The config files about to become servers (SPEC §3.5), each with the name it will show
+  // under: of the bundle in use, or of a new bundle when there is none. Nothing has been read
+  // yet: the files are read when the button is pressed.
   import { untrack } from "svelte";
   import type { Bundle, ChosenFile } from "$lib/ipc";
 
@@ -11,17 +12,20 @@
     onadd,
     oncancel,
   }: {
-    bundle: Bundle;
+    /** The bundle that gets the servers; null to make a new bundle of them. */
+    bundle: Bundle | null;
     files: ChosenFile[];
     /** A tunnel is up: the edit reconnects it. */
     reconnects: boolean;
-    onadd: (files: ChosenFile[]) => void;
+    /** `bundleName` is the new bundle's name, and unused when adding to one. */
+    onadd: (files: ChosenFile[], bundleName: string) => void;
     oncancel: () => void;
   } = $props();
 
   let dialog: (HTMLElement & { show(): void; hide(): void }) | undefined = $state();
   // The names start as offered and are the user's from then on.
   let names = $state(untrack(() => files.map((file) => file.name)));
+  let bundleName = $state("My servers");
   let answered = false;
 
   $effect(() => {
@@ -32,7 +36,10 @@
 
   function add() {
     answered = true;
-    onadd(files.map((file, i) => ({ path: file.path, name: names[i].trim() })));
+    onadd(
+      files.map((file, i) => ({ path: file.path, name: names[i].trim() })),
+      bundleName.trim(),
+    );
   }
 
   // Fluent's inputs keep the real input element in a shadow root, so Enter is handled here.
@@ -46,11 +53,26 @@
   }
 </script>
 
-<fluent-dialog bind:this={dialog} type="modal" aria-label="Add servers" {ontoggle}>
+<fluent-dialog bind:this={dialog} type="modal" aria-label={bundle ? "Add servers" : "New bundle"} {ontoggle}>
   <fluent-dialog-body>
     <div slot="title">
-      {files.length === 1 ? "Add a server" : `Add ${files.length} servers`} to {bundle.bundle_name}
+      {#if bundle}
+        {files.length === 1 ? "Add a server" : `Add ${files.length} servers`} to {bundle.bundle_name}
+      {:else}
+        New bundle from {files.length === 1 ? "a config file" : `${files.length} config files`}
+      {/if}
     </div>
+    {#if !bundle}
+      <fluent-text-input
+        class="bundle-name"
+        value={bundleName}
+        oninput={(e: Event) => (bundleName = (e.currentTarget as HTMLInputElement).value)}
+        {onkeydown}
+        maxlength="100"
+        autocomplete="off"
+        spellcheck="false"
+      >Bundle name</fluent-text-input>
+    {/if}
     <div class="files">
       {#each files as file, i (file.path)}
         <fluent-text-input
@@ -68,12 +90,16 @@
       file that could run a program is refused.
       {#if reconnects}The tunnel reconnects once; the block stays in place meanwhile.{/if}
     </p>
-    <fluent-button slot="action" appearance="primary" onclick={add}>Add</fluent-button>
+    <fluent-button slot="action" appearance="primary" onclick={add}>{bundle ? "Add" : "Create"}</fluent-button>
     <fluent-button slot="action" onclick={oncancel}>Cancel</fluent-button>
   </fluent-dialog-body>
 </fluent-dialog>
 
 <style>
+  .bundle-name {
+    display: block;
+    margin-bottom: 16px;
+  }
   .files {
     display: flex;
     flex-direction: column;

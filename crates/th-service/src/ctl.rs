@@ -20,6 +20,7 @@ pub const USAGE: &str = "usage: th-service ctl <command>
   select <bundle id>          make an imported bundle the active one
   bundles                     every installed bundle, and the active one
   delete <bundle id>          delete an installed bundle and its credentials
+  create <name> <file>...     make a bundle of .conf/.ovpn files (prints its id)
   add <bundle id> <file>...   add .conf/.ovpn files as servers (prints the new bundle id)
   remove <bundle id> <id>...  remove servers by profile id (prints the new bundle id)
   connect [profile]           connect to a profile, or a random one
@@ -28,6 +29,21 @@ pub const USAGE: &str = "usage: th-service ctl <command>
   interval <minutes>          set the rotation interval
   auto <on|off>               turn automatic rotation on or off
   watch                       print the service's events as they happen";
+
+/// The config files at `paths`, read here and each under its own name.
+fn config_files(paths: &[&str]) -> Result<Vec<ProfileFile>, String> {
+    paths
+        .iter()
+        .map(|path| {
+            let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
+            let file_name = std::path::Path::new(path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .ok_or_else(|| format!("{path} has no usable file name"))?;
+            Ok(ProfileFile::new("", file_name, &bytes))
+        })
+        .collect()
+}
 
 /// The request a command line asks for, or why it is not one.
 pub fn request(arguments: &[String]) -> Result<Option<Request>, String> {
@@ -47,21 +63,14 @@ pub fn request(arguments: &[String]) -> Result<Option<Request>, String> {
         ["delete", id] => Request::DeleteBundle {
             bundle_id: id.to_string(),
         },
-        ["add", id, paths @ ..] if !paths.is_empty() => {
-            let mut files = Vec::new();
-            for path in paths {
-                let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
-                let file_name = std::path::Path::new(path)
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .ok_or_else(|| format!("{path} has no usable file name"))?;
-                files.push(ProfileFile::new("", file_name, &bytes));
-            }
-            Request::AddProfiles {
-                bundle_id: id.to_string(),
-                files,
-            }
-        }
+        ["create", name, paths @ ..] if !paths.is_empty() => Request::CreateBundle {
+            name: name.to_string(),
+            files: config_files(paths)?,
+        },
+        ["add", id, paths @ ..] if !paths.is_empty() => Request::AddProfiles {
+            bundle_id: id.to_string(),
+            files: config_files(paths)?,
+        },
         ["remove", id, profiles @ ..] if !profiles.is_empty() => Request::RemoveProfiles {
             bundle_id: id.to_string(),
             profile_ids: profiles.iter().map(|p| p.to_string()).collect(),
@@ -209,6 +218,18 @@ mod tests {
                 files: vec![ProfileFile::new("", "nl-1.conf", b"[Interface]\n")],
             }))
         );
+        let line = vec![
+            "create".to_string(),
+            "Proton UA".to_string(),
+            path.to_str().unwrap().to_string(),
+        ];
+        assert_eq!(
+            request(&line),
+            Ok(Some(Request::CreateBundle {
+                name: "Proton UA".into(),
+                files: vec![ProfileFile::new("", "nl-1.conf", b"[Interface]\n")],
+            }))
+        );
     }
 
     #[test]
@@ -223,6 +244,8 @@ mod tests {
             "delete ../x",
             "add 0123456789abcdef",
             "add 0123456789abcdef C:\\no\\such\\file.conf",
+            "create Lab",
+            "create Lab C:\\no\\such\\file.conf",
             "remove 0123456789abcdef",
             "remove 0123456789abcdef UPPER",
             "delete",

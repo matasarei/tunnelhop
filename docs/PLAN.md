@@ -478,6 +478,54 @@ step (or per closely related pair), opened as a PR against `main`.
 26. [x] `Secret` wipes its memory on drop — `zeroize` on `ipc::Secret` and
     `sanitize::Credentials`, and on the `auth.txt` text while it's parsed (step 10's branch).
 
+### Added after the first run on the PC
+29. [x] A bundle from loose config files. With no bundle in use, picking or dropping
+    `.conf`/`.ovpn` files is refused today ("Servers are added to the bundle in use"), so a
+    user whose provider hands out single files, not a zip, cannot start at all.
+    - With no bundle in use, the chosen files become a new bundle, which is then the one in
+      use. With a bundle in use nothing changes: the files are added to it (step 28).
+    - A zip with no `manifest.json` that holds only `.conf`/`.ovpn` files (what a user gets
+      by zipping those files by hand) is treated as the same loose files, at any folder depth,
+      instead of being refused entry by entry. Anything else in such a zip still refuses it.
+    - Core: `edit::create(name, files)` builds the manifest and the zip from nothing, with the
+      same file checks, ids and deterministic zip as `edit::rebuild`. The ordinary import then
+      judges the configs, so a hostile file is refused exactly as in a provider's zip.
+    - IPC: a `CreateBundle { name, files }` request answered with `Imported`/`ImportFailed`;
+      `PROTOCOL_VERSION` 3. Service: create, import, select; the cap of 20 applies.
+      `ctl create <name> <files…>`.
+    - UI: the same naming dialog as for adding servers, plus a field for the bundle's name
+      (default "My servers"); the empty state says that config files work too and gets an
+      "Add servers…" button next to "Import bundle…". SPEC §3.5 says the same.
+    - Proven by: core tests (one file, several, both protocols, a hostile file, an unknown
+      extension, a duplicate name, too large); orchestrator tests (created and selected, cap
+      reached, refused with nothing left behind); in `th-test`, `ctl create` with the lab's
+      WireGuard and OpenVPN files then connect and rotate, and the same through the window.
+    - Landed: `edit::create`, `edit::from_config_zip` (`crates/th-core/src/edit.rs`);
+      `bundle::read_entries` takes the name rule; `Request::CreateBundle`,
+      `PROTOCOL_VERSION` 3; `Orchestrator::create` and one shared `install` path for an
+      import, a zip of configs and a new bundle; `ctl create`; the app's `create_bundle`;
+      `AddServers.svelte` with a bundle-name field; the empty state and its "Add servers…"
+      button; SPEC §3.5 and §5.
+    - Ruling: a zip counts as bare configs when it has no `manifest.json` and at least one
+      `.conf`/`.ovpn`; any other file in it refuses the whole zip, naming the file.
+    - Ruling: a bundle made from a zip is called "My servers": an import carries no name.
+    - Ruling: the service makes the new bundle active only when no bundle is; with one in
+      use (reachable through `ctl create` only) it is installed beside it and the tunnel is
+      not touched.
+    - Ruling: the empty state now leads with config files; a prepared TunnelHop bundle is
+      mentioned last, since no provider ships one.
+    - Checked in `th-test` (2026-10-10, installed build): `ctl create` with `wg-a.conf`,
+      `wg-b.conf` and `ovpn.ovpn` gave a bundle in use, three rotations across all three
+      servers with the kill-switch on; a file with `PostUp` was refused with its line and no
+      `calc` ran; a zip made by `Compress-Archive` imported as "My servers" without touching
+      the tunnel. Through the window by keyboard: "Add servers…", two files in the picker,
+      the dialog with the bundle name, Create, then Connect reached `connected`.
+    - Not checked: dropping files or a zip on the window (it needs a mouse); a zip made by
+      Explorer's "Compress to ZIP" (the lab one came from `Compress-Archive`); real provider
+      files.
+    - Open: whether a second bundle can be made from files while one is in use (today's
+      answer in the window: no, they are added to it).
+
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
   (on the PC, and on CI for every PR)
@@ -684,5 +732,9 @@ Still open:
 - **2026-10-10:** step 28 merged (PR #16). Step 19, the installer and `docs/TESTING.md`,
   landed on `feature/installer`; the installer pass and the acceptance criteria were checked
   in `th-test` from the `clean` checkpoint.
-- **Next:** the final pass on the PC (a person's job, TESTING.md §3), then the postponed nits
+- **2026-10-10:** step 19 merged (PR #17). First install on the PC: with no bundle, loose
+  `.conf` files could not be added, which became step 29.
+- **2026-10-10:** step 29, a bundle from loose config files, landed on
+  `feature/bundle-from-files` and was checked in `th-test`.
+- **Next:** the rest of the pass on the PC (TESTING.md §3), then the postponed nits
   (steps 20–23) and the follow-ups in `.tasks/`.

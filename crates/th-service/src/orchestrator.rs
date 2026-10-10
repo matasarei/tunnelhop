@@ -239,22 +239,14 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Request::SelectBundle { bundle_id } => self.select(&mut inner, &bundle_id).await,
             Request::ListBundles => self.list().await,
             Request::DeleteBundle { bundle_id } => self.delete(&mut inner, &bundle_id).await,
-            Request::AddProfiles { bundle_id, files } => {
-                let new: Result<Vec<NewProfile>, _> = files
-                    .iter()
-                    .map(|file| {
-                        file.content().map(|content| NewProfile {
-                            name: file.name.clone(),
-                            file_name: file.file_name.clone(),
-                            content,
-                        })
-                    })
-                    .collect();
-                match new {
-                    Ok(new) => self.edit(&mut inner, &bundle_id, Edit::Add(new), now).await,
-                    Err(e) => error(e),
-                }
-            }
+            Request::AddProfiles { bundle_id, files } => match new_profiles(&files) {
+                Ok(new) => self.edit(&mut inner, &bundle_id, Edit::Add(new), now).await,
+                Err(e) => error(e),
+            },
+            Request::CreateBundle { name, files } => match new_profiles(&files) {
+                Ok(new) => self.create(&mut inner, &name, new).await,
+                Err(e) => error(e),
+            },
             Request::RemoveProfiles {
                 bundle_id,
                 profile_ids,
@@ -344,40 +336,96 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Ok(bytes) => bytes,
             Err(e) => return error(e),
         };
+        // A zip of bare config files is not a bundle yet: it becomes one first (SPEC §3.5).
+        let converted = tokio::task::spawn_blocking(move || match edit::from_config_zip(&bytes) {
+            Some(built) => built,
+            None => Ok(bytes),
+        })
+        .await;
+        let bytes = match converted {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(errors)) => return import_failed(&errors),
+            Err(e) => return error(format!("the import failed: {e}")),
+        };
+        match self.install(bytes).await {
+            Ok(imported) => {
+                self.publish(inner);
+                self.imported(&imported)
+            }
+            Err(refusal) => *refusal,
+        }
+    }
+
+    /// Make a new bundle of loose config files (SPEC §3.5) and install it like an imported
+    /// one. With no bundle active it becomes the active one: there is nothing to leave.
+    async fn create(&self, inner: &mut Inner, name: &str, files: Vec<NewProfile>) -> Response {
+        let zip = match edit::create(name, &files) {
+            Ok(zip) => zip,
+            Err(errors) => return import_failed(&errors),
+        };
+        let imported = match self.install(zip).await {
+            Ok(imported) => imported,
+            Err(refusal) => return *refusal,
+        };
+        // Selecting lifts a block left by a crash, and that is the user's to ask for: the
+        // bundle then waits, installed, to be switched to.
+        if inner.active.is_none()
+            && !inner.orphan_block
+            && let Response::Error { message } = self.select(inner, imported.id.as_str()).await
+        {
+            // The bundle is installed either way; the user can still switch to it.
+            log::warn!(
+                "the new bundle {} was not made active: {message}",
+                imported.id
+            );
+        }
+        self.publish(inner);
+        self.imported(&imported)
+    }
+
+    /// Install a bundle's zip: the cap, the import and its credentials. `Err` is the answer
+    /// to send when it was refused.
+    async fn install(&self, bytes: Vec<u8>) -> Result<ImportedBundle, Box<Response>> {
         let root = self.layout.bundles();
         // The same zip again is not another bundle, so it is never what the cap refuses.
         match bundle::installed(&root) {
             Ok(installed)
                 if installed.len() >= MAX_BUNDLES && !installed.contains(&BundleId::of(&bytes)) =>
             {
-                return error(format!(
+                return Err(Box::new(error(format!(
                     "{MAX_BUNDLES} bundles are installed, the most TunnelHop keeps: delete a \
                      bundle first"
-                ));
+                ))));
             }
             Ok(_) => {}
-            Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
+            Err(e) => {
+                return Err(Box::new(error(format!(
+                    "the installed bundles cannot be read: {e}"
+                ))));
+            }
         }
         let imported =
             match tokio::task::spawn_blocking(move || bundle::import(&bytes, &root)).await {
                 Ok(Ok(imported)) => imported,
-                Ok(Err(errors)) => {
-                    return Response::ImportFailed {
-                        errors: errors.iter().map(ToString::to_string).collect(),
-                    };
-                }
-                Err(e) => return error(format!("the import failed: {e}")),
+                Ok(Err(errors)) => return Err(Box::new(import_failed(&errors))),
+                Err(e) => return Err(Box::new(error(format!("the import failed: {e}")))),
             };
         if let Err(e) = self.credentials.store_imported(&imported) {
-            return error(format!("the bundle's credentials could not be stored: {e}"));
+            return Err(Box::new(error(format!(
+                "the bundle's credentials could not be stored: {e}"
+            ))));
         }
         log::info!(
             "imported bundle {} ({})",
             imported.id,
             imported.manifest.bundle_name
         );
-        let missing = self.missing_credentials(&imported);
-        self.publish(inner);
+        Ok(imported)
+    }
+
+    /// The answer to an import, an edit or a new bundle that went through.
+    fn imported(&self, imported: &ImportedBundle) -> Response {
+        let missing = self.missing_credentials(imported);
         Response::Imported {
             bundle: bundle_info(
                 &imported.id,
@@ -571,20 +619,8 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             "bundle {old} became {new} ({})",
             imported.manifest.bundle_name
         );
-        let missing = self.missing_credentials(&imported);
         self.publish(inner);
-        Response::Imported {
-            bundle: bundle_info(&new, &imported.manifest, &imported.needs_credentials, |p| {
-                self.credentials.has(&new, p)
-            }),
-            already_present: imported.already_present,
-            needs_credentials: imported
-                .needs_credentials
-                .iter()
-                .filter(|p| missing.contains(*p))
-                .cloned()
-                .collect(),
-        }
+        self.imported(&imported)
     }
 
     /// Make the edited bundle the active one in place of the bundle it replaces. A tunnel
@@ -819,6 +855,26 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             message: message.to_string(),
         });
     }
+}
+
+fn import_failed(errors: &[bundle::ImportError]) -> Response {
+    Response::ImportFailed {
+        errors: errors.iter().map(ToString::to_string).collect(),
+    }
+}
+
+/// The config files of a request, decoded.
+fn new_profiles(files: &[ipc::ProfileFile]) -> Result<Vec<NewProfile>, ipc::IpcError> {
+    files
+        .iter()
+        .map(|file| {
+            file.content().map(|content| NewProfile {
+                name: file.name.clone(),
+                file_name: file.file_name.clone(),
+                content,
+            })
+        })
+        .collect()
 }
 
 fn error(message: impl ToString) -> Response {

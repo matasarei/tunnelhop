@@ -194,6 +194,18 @@ OpenVPN, with `port` and `proto` defaults applied) are extracted at import for t
   bundle disconnects first and leaves no bundle active.
 - **At most 20 bundles** are installed at once; importing a 21st is refused with "delete a
   bundle first".
+- **A bundle from config files.** Providers hand out single `.conf` and `.ovpn` files, not
+  bundles, so the user can start from those:
+  1. With no bundle active, the files the user gives (as for **Add** below) become a new
+     bundle with a name the user chooses (default "My servers"). The service builds its
+     manifest and zip, imports it through §3.3 and §3.4 unchanged, and makes it the active
+     bundle, unless a block left by a crash is in place: then it is only installed, since
+     selecting would lift the block. With a bundle active, the window adds the files to that
+     bundle instead; a `CreateBundle` request sent then (`ctl create`) installs the new
+     bundle beside it and leaves the active one and its tunnel alone.
+  2. An imported zip with no `manifest.json` that holds `.conf`/`.ovpn` files is treated as
+     those files, whatever folders they sit in, and becomes a bundle called "My servers". Any
+     other file in such a zip refuses it. The archive limits of §3.3 apply.
 - **Editing servers.** A bundle stays immutable: its id is the hash of its zip. Adding or removing
   servers therefore produces a **new bundle**, which replaces the old one:
   1. **Add:** the user gives one or more `.conf` (WireGuard) or `.ovpn` (OpenVPN) files, the
@@ -332,7 +344,9 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
   - **Bundles:** every installed bundle, the active one marked; switch to another, or delete one
     (§3.5).
   - **Servers:** add `.conf`/`.ovpn` files to the active bundle by picker or drag-and-drop,
-    each with an editable name, and remove a server from the profile list (§3.5).
+    each with an editable name, and remove a server from the profile list (§3.5). With no
+    bundle active the same files make a new bundle, named in the same dialog; the empty
+    window offers this first.
   - Errors from the service (a refused import, a failed connect, a rejected edit) show in the
     window, each with its file and line where there is one.
 - **Tray menu:**

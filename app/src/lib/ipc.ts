@@ -77,6 +77,10 @@ export const chooseServers = (paths?: string[]) =>
 export const addServers = (bundleId: string, files: ChosenFile[]) =>
   invoke<ImportOutcome>("add_servers", { bundleId, files });
 
+/** Make a new bundle of config files; the service puts it in use when no bundle is. */
+export const createBundle = (name: string, files: ChosenFile[]) =>
+  invoke<ImportOutcome>("create_bundle", { name, files });
+
 export const removeServers = (bundleId: string, profileIds: string[]) =>
   invoke<ImportOutcome>("remove_servers", { bundleId, profileIds });
 
