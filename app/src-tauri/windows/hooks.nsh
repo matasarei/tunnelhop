@@ -2,6 +2,9 @@
 ; th-service.exe, and is registered and removed here. The installer runs elevated (per-machine
 ; install), which is what registering a service needs; the app itself never is.
 
+; What the hooks say, in each of the installer's languages.
+!include /CHARSET=UTF8 "${__FILEDIR__}\messages.nsh"
+
 ; The app is closed before the service is touched. Tauri's own check for a running app comes
 ; after these hooks and can be cancelled, or fail (it cannot close an app in another session):
 ; either would leave the service stopped or removed with the old app still open. The app holds
@@ -16,20 +19,18 @@
   ; An upgrade: the running service holds th-service.exe open, so it stops before the files
   ; are replaced. Stopping disconnects and lifts the block, as every stop does. `net stop`
   ; returns once the service has stopped; on a first install there is nothing to stop.
-  DetailPrint "Stopping the TunnelHop service, if it is running..."
+  !insertmacro TH_PRINT STOPPING_MAYBE
   nsExec::ExecToLog '"$SYSDIR\net.exe" stop TunnelHop'
   Pop $0
 !macroend
 
-; The message boxes carry /SD so that a silent install (/S) never waits on one.
-
 !macro NSIS_HOOK_POSTINSTALL
   ; Registers the service (or points an existing registration at the new file) and starts it.
-  DetailPrint "Installing the TunnelHop service..."
+  !insertmacro TH_PRINT INSTALLING
   nsExec::ExecToLog '"$INSTDIR\th-service.exe" install'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_ICONEXCLAMATION|MB_OK "The TunnelHop service could not be installed (code $0).$\n$\nThe app will say the service is not running. Run this installer again, or, from an administrator prompt:$\n$\n$\"$INSTDIR\th-service.exe$\" install" /SD IDOK
+    !insertmacro TH_WARN INSTALL_FAILED install
   ${EndIf}
 !macroend
 
@@ -38,16 +39,16 @@
   ; $UpdateMode is 1 when a newer installer runs this uninstaller to replace the app: then
   ; the service only stops, and its bundles, settings and saved sign-in stay.
   ${If} $UpdateMode = 1
-    DetailPrint "Stopping the TunnelHop service..."
+    !insertmacro TH_PRINT STOPPING
     nsExec::ExecToLog '"$SYSDIR\net.exe" stop TunnelHop'
     Pop $0
   ${Else}
     ; Disconnects, lifts the block, removes the service and %ProgramData%\TunnelHop.
-    DetailPrint "Removing the TunnelHop service and its data..."
+    !insertmacro TH_PRINT REMOVING
     nsExec::ExecToLog '"$INSTDIR\th-service.exe" uninstall'
     Pop $0
     ${If} $0 != 0
-      MessageBox MB_ICONEXCLAMATION|MB_OK "The TunnelHop service could not be removed completely (code $0).$\n$\nIf the internet is blocked afterwards, run from an administrator prompt, before deleting the file:$\n$\n$\"$INSTDIR\th-service.exe$\" disengage" /SD IDOK
+      !insertmacro TH_WARN REMOVE_FAILED disengage
     ${EndIf}
   ${EndIf}
 !macroend
