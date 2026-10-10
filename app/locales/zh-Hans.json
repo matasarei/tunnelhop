@@ -142,6 +142,10 @@
   "signin.username": "用户名",
   "signin.password": "密码",
   "signin.stored": "由 TunnelHop 服务保存，并为这台电脑加密。应用不保留副本。",
+  "signin.asks": "此服务器需要用户名和密码。",
+  "signin.refused": "服务器拒绝了已保存的用户名和密码。请重新输入。",
+  "signin.provider_hint": "有些服务商会在账户设置中为 OpenVPN 提供单独的用户名和密码（Proton VPN 就是这样）；账户本身的登录信息会被拒绝。",
+  "signin.everywhere": "用于此配置包中的所有 OpenVPN 服务器",
 
   "runtime.missing": "未安装 {name}",
   "runtime.unchecked": "无法检查 {name}（需要 {required} 或更高版本）",

@@ -150,6 +150,10 @@
   "signin.username": "Nome de usuário",
   "signin.password": "Senha",
   "signin.stored": "Guardado pelo serviço do TunnelHop, criptografado para este PC. O aplicativo não mantém nenhuma cópia.",
+  "signin.asks": "Este servidor pede nome de usuário e senha.",
+  "signin.refused": "O servidor recusou o nome de usuário e a senha salvos. Digite-os novamente.",
+  "signin.provider_hint": "Alguns provedores fornecem um nome de usuário e uma senha separados para o OpenVPN nas configurações da conta (o Proton VPN faz isso); as credenciais da própria conta são recusadas.",
+  "signin.everywhere": "Usar para todos os servidores OpenVPN deste pacote",
 
   "runtime.missing": "{name} não está instalado",
   "runtime.unchecked": "Não foi possível verificar {name} (é necessária a versão {required} ou mais recente)",
