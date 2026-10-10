@@ -227,7 +227,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         // tunnel takes to connect, and the UI must not freeze meanwhile.
         match request {
             Request::GetStatus => return self.status(),
-            Request::ListBundles => return self.list(),
+            Request::ListBundles => return self.list().await,
             _ => {}
         }
         let mut inner = self.inner.lock().await;
@@ -236,7 +236,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Request::GetStatus => self.status(),
             Request::ImportBundle { zip_base64 } => self.import(&inner, &zip_base64).await,
             Request::SelectBundle { bundle_id } => self.select(&mut inner, &bundle_id).await,
-            Request::ListBundles => self.list(),
+            Request::ListBundles => self.list().await,
             Request::DeleteBundle { bundle_id } => self.delete(&mut inner, &bundle_id).await,
             Request::Connect { profile_id } => {
                 if inner.active.is_none() {
@@ -399,15 +399,29 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
 
     /// Every installed bundle, ordered by name, and the active one's id. The active id comes
     /// from the cached report, so this never waits for a rotation in progress.
-    fn list(&self) -> Response {
+    async fn list(&self) -> Response {
         let root = self.layout.bundles();
-        let ids = match bundle::installed(&root) {
-            Ok(ids) => ids,
+        // Opening a bundle reads and checks every one of its configs: off the runtime's
+        // threads, like an import.
+        let opened = tokio::task::spawn_blocking(move || {
+            bundle::installed(&root).map(|ids| {
+                ids.into_iter()
+                    .map(|id| {
+                        let bundle = bundle::open(&root, &id);
+                        (id, bundle)
+                    })
+                    .collect::<Vec<_>>()
+            })
+        })
+        .await;
+        let opened = match opened {
+            Ok(Ok(opened)) => opened,
+            Ok(Err(e)) => return error(format!("the installed bundles cannot be read: {e}")),
             Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
         };
-        let mut bundles: Vec<BundleInfo> = ids
+        let mut bundles: Vec<BundleInfo> = opened
             .iter()
-            .map(|id| match bundle::open(&root, id) {
+            .map(|(id, bundle)| match bundle {
                 Ok(bundle) => bundle_info(id, &bundle.manifest, &bundle.needs_credentials, |p| {
                     self.credentials.has(id, p)
                 }),
@@ -463,7 +477,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             return error(format!("the bundle's files could not be removed: {e}"));
         }
         log::info!("deleted bundle {id}");
-        self.list()
+        self.list().await
     }
 
     async fn rotate(&self, inner: &mut Inner, trigger: Trigger, now: Instant) -> Response {
