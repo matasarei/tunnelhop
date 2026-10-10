@@ -462,6 +462,12 @@ fn only_a_zip_of_bare_configs_is_converted() {
     assert!(edit::from_config_zip(b"not a zip").is_none());
     let notes = zip(&[Entry::File("notes.txt", b"hello".to_vec())]);
     assert!(edit::from_config_zip(&notes).is_none());
+    // So is a bundle zipped one folder too deep: a manifest anywhere means a bundle was meant.
+    let nested = zip(&[
+        Entry::File("lab/manifest.json", b"{}".to_vec()),
+        Entry::File("lab/wireguard/a.conf", WG_CONF.as_bytes().to_vec()),
+    ]);
+    assert!(edit::from_config_zip(&nested).is_none());
 
     // Configs with anything else beside them are refused, naming the other file.
     let mixed = zip(&[

@@ -137,7 +137,7 @@ pub fn create(name: &str, new: &[NewProfile]) -> Result<Vec<u8>, Vec<ImportError
     pack(&manifest, files)
 }
 
-/// When `zip_bytes` is a zip of bare config files (no `manifest.json`, at least one `.conf`
+/// When `zip_bytes` is a zip of bare config files (no `manifest.json` anywhere, at least one `.conf`
 /// or `.ovpn`), the bundle zip [`create`] makes of them; `None` for anything else, which is
 /// the import's to judge. The files may sit in folders: only their own names are used.
 pub fn from_config_zip(zip_bytes: &[u8]) -> Option<Result<Vec<u8>, Vec<ImportError>>> {
@@ -145,7 +145,11 @@ pub fn from_config_zip(zip_bytes: &[u8]) -> Option<Result<Vec<u8>, Vec<ImportErr
         return None;
     }
     let archive = ZipArchive::new(Cursor::new(zip_bytes)).ok()?;
-    if archive.file_names().any(|name| name == MANIFEST_FILE)
+    // A manifest anywhere means a bundle was meant (zipped one folder too deep, say): the
+    // import's own errors describe that better than "only config files" would.
+    if archive
+        .file_names()
+        .any(|name| base_name(name).eq_ignore_ascii_case(MANIFEST_FILE))
         || !archive
             .file_names()
             .any(|name| protocol_of(base_name(name)).is_some())
