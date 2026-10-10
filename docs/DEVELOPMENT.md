@@ -268,6 +268,9 @@ Restore-VMCheckpoint -VMName th-test -Name clean -Confirm:$false  # back to a fr
 # On the PC: build with the Tauri CLI. A plain `cargo build` points the window at the dev
 # server (localhost:1420), and the window shows "connection refused".
 cd app; npx tauri build --no-bundle; cd ..          # -> target\release\th-app.exe
+# The installer (app + service), for the installer pass in TESTING.md §3. The first build
+# downloads NSIS into %LOCALAPPDATA%\tauri.
+cd app; npx tauri build; cd ..    # -> target\release\bundle\nsis\TunnelHop_<version>_x64-setup.exe
 ```
 
 - **Run it from `C:\Program Files\TunnelHop\`**, not from `C:\th`. `C:\th` is locked to
@@ -310,6 +313,8 @@ scripts\vm.ps1 run 'C:\th\th-service.exe ctl import C:\th\configs\bundle-all.zip
 scripts\vm.ps1 run 'C:\th\th-service.exe ctl select <bundle id>'
 
 scripts\leak-test.ps1          # 20 rotations through `th-service ctl rotate`, then the analysis
+# Against an installed build instead of the dev copy in C:\th:
+scripts\leak-test.ps1 -Service 'C:\Program Files\TunnelHop\th-service.exe'
 ```
 
 The script captures with `pktmon` during the rotations, copies the capture to the PC, and reads

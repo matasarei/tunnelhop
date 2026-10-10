@@ -91,36 +91,36 @@ docs/TESTING.md               # the full manual acceptance procedure (step 19)
   a missing profile file, an unknown manifest field, or Windows-reserved names.
 - [x] `.ovpn` script, plugin and file directives are refused with file and line, including
   quoted, escaped and chunk-split variants. So are WireGuard hook keys.
-- [ ] After import, no plaintext `auth.txt` exists on disk, and `bundles\`, `tunnels\` and
+- [x] After import, no plaintext `auth.txt` exists on disk, and `bundles\`, `tunnels\` and
   `secrets\` are unreadable by a standard user (`icacls` shows SYSTEM and Administrators only).
-- [ ] The UI runs without elevation: Task Manager's "Elevated" column shows No, and no UAC
+- [x] The UI runs without elevation: Task Manager's "Elevated" column shows No, and no UAC
   prompt appears at launch or on connect.
-- [ ] Two bundles that both contain `wireguard/ua-kyiv-01.conf` import, and each connects
+- [x] Two bundles that both contain `wireguard/ua-kyiv-01.conf` import, and each connects
   under its own `WireGuardTunnel$th-…` service.
-- [ ] During 20 consecutive "Rotate Now" switches in the test VM, a packet capture on its
+- [x] During 20 consecutive "Rotate Now" switches in the test VM, a packet capture on its
   network adapter shows **zero** packets other than to the VPN server endpoints, DHCP and
   NDP, across WireGuard→OpenVPN and OpenVPN→WireGuard switches.
-- [ ] If `th-service.exe` is killed mid-rotation, traffic stays blocked. After a restart the
+- [x] If `th-service.exe` is killed mid-rotation, traffic stays blocked. After a restart the
   service reconnects or offers "Disconnect & unblock", and leaves no stray
   `WireGuardTunnel$th-*` or `openvpn.exe`.
-- [ ] The OpenVPN management port refuses a client without the password, and the port differs
+- [x] The OpenVPN management port refuses a client without the password, and the port differs
   between two consecutive connects.
 - [x] A one-profile bundle rotates by reconnecting that profile (engine level).
-- [ ] When all candidates fail, the state is `Blocked`, the tray shows an alert, and no traffic
+- [x] When all candidates fail, the state is `Blocked`, the tray shows an alert, and no traffic
   leaves the adapter.
-- [ ] An OpenVPN profile with a bare `auth-user-pass` (Proton) imports, is reported as needing
+- [x] An OpenVPN profile with a bare `auth-user-pass` (Proton) imports, is reported as needing
   credentials, and is never picked for rotation until they are set. After the UI asks once
   and stores them via DPAPI, the profile connects. (The engine part is done.)
 - [ ] A timer or manual rotation that keeps the same public IP tries another candidate,
   preferring a different entry. If none changes it, it stays connected and the tray says the
   IP did not change. (The engine part is done.)
-- [ ] A rotation interval set in the tray survives a service restart and overrides the
+- [x] A rotation interval set in the tray survives a service restart and overrides the
   manifest's `interval_minutes`.
-- [ ] Tray "Exit" and the NSIS uninstall both leave no tunnel services, no filters under our
+- [x] Tray "Exit" and the NSIS uninstall both leave no tunnel services, no filters under our
   provider (`netsh wfp show filters`), and working internet.
 - [ ] `wireguard.exe` < 0.5.3 or `openvpn.exe` < 2.6 shows as "runtime too old" in the UI, and
   that protocol is disabled.
-- [ ] The release build contains no dev-only safety timer or SSH exception (CI check).
+- [x] The release build contains no dev-only safety timer or SSH exception (CI check).
 
 ## Steps
 
@@ -421,8 +421,35 @@ step (or per closely related pair), opened as a PR against `main`.
       added file refused with its line); orchestrator tests for credentials carried over and
       the active swap; in the VM, add the lab's `ovpn-auth.ovpn` to `bundle-wg.zip` through
       the UI, connect to it, then remove it, with the leak capture running throughout.
-19. [ ] NSIS installer hooks (service install and uninstall, full cleanup) and
+19. [x] NSIS installer hooks (service install and uninstall, full cleanup) and
     `docs/TESTING.md` covering every acceptance criterion.
+    - Landed: `app/src-tauri/windows/hooks.nsh`; `tauri.conf.json` (per-machine install,
+      `th-service.exe` as a resource, built by `beforeBundleCommand`); `svc::install` safe
+      over an existing registration, `svc::uninstall` cleaning up whatever state it finds;
+      `PROTOCOL_VERSION` 2; `docs/TESTING.md`; `leak-test.ps1 -Service`;
+      `bundle-authfile.zip` in the lab.
+    - Decided: the protocol version is raised whenever a request, response or event is
+      added or changed, starting with 2; the installer also replaces app and service
+      together.
+    - Ruling: the hooks close the app before touching the service (Tauri's own check comes
+      later and can be cancelled or fail, leaving the service removed with the app open).
+    - Ruling: an upgrade drops the tunnel and lifts the block until the user connects again.
+    - Checked in `th-test` from the `clean` checkpoint, results in `docs/TESTING.md`:
+      install, upgrade, three uninstalls (service running, service just killed, app open),
+      and the acceptance criteria against the installed build, including the 20-rotation
+      leak test (0 frames outside the tunnel).
+    - **Open: the final pass on the PC.** A person's job, not a script's (the kill-switch
+      rule keeps it off the PC for automation); TESTING.md §3 has the steps and the recovery
+      command.
+    - Two acceptance criteria stay unticked: "the same public IP" and "runtime too old" pass
+      in tests but were not reproduced live (the lab gives every server its own address, and
+      has no old runtime).
+    - Not checked: the installer's interactive pages (every run was `/S`), launching the app
+      from the Start menu, and an upgrade from an older version number.
+    - Noticed, not changed: the app's file is `th-app.exe` (Task Manager shows that name);
+      `mainBinaryName` would make it `TunnelHop.exe`. And a reinstall after an uninstall does
+      not switch autostart on again, since the "already offered" marker stays in the user's
+      profile.
     - Decide here: requests were added in steps 27 and 28 with `PROTOCOL_VERSION` still 1.
       Either bump it whenever requests are added, or have the installer guarantee that the
       app and the service are always replaced together.
@@ -653,4 +680,8 @@ Still open:
   `feature/bundle-management` and was checked in `th-test`.
 - **2026-10-10:** step 27 merged (PR #15). Step 28, editing a bundle's servers, landed on
   `feature/edit-servers` and was checked in `th-test` under the leak capture.
-- **Next:** step 19, the installer and `docs/TESTING.md`.
+- **2026-10-10:** step 28 merged (PR #16). Step 19, the installer and `docs/TESTING.md`,
+  landed on `feature/installer`; the installer pass and the acceptance criteria were checked
+  in `th-test` from the `clean` checkpoint.
+- **Next:** the final pass on the PC (a person's job, TESTING.md §3), then the postponed nits
+  (steps 20–23) and the follow-ups in `.tasks/`.

@@ -13,6 +13,9 @@ A bundle's id is the hash of its zip, so a rebuilt bundle imports as a new one.
   bundle-auth.zip     WireGuard A plus an OpenVPN profile with a bare auth-user-pass, as
                       ProtonVPN ships them: the import reports it as needing credentials.
                       The lab server takes th-test-user with the password in gen.sh.
+  bundle-authfile.zip WireGuard A plus an OpenVPN profile whose credentials come in the
+                      archive's auth.txt: the import must seal them and leave no plaintext
+                      copy on disk.
   bundle-hostile.zip  Must be refused: a WireGuard config with PostUp and an OpenVPN config
                       with an up script and script-security. Nothing in it may ever run.
 """
@@ -53,13 +56,29 @@ evil_ovpn = profile(
     'script-security 2\nup "C:\\\\Windows\\\\System32\\\\calc.exe"\n' + read("ovpn.ovpn"),
 )
 
+ovpn_file = profile(
+    "ovpn-file",
+    "Lab OpenVPN (auth.txt)",
+    "openvpn",
+    "with-file.ovpn",
+    read("ovpn.ovpn") + "auth-user-pass auth.txt\n",
+)
+# The lab's fixed, obviously fake credentials (gen.sh), as a provider's auth.txt holds them.
+AUTH_TXT = 'th-test-user\nth-test "pass\\word\n'
+
+# name: (bundle name, profiles, other files in the archive)
 bundles = {
-    "bundle-wg.zip": ("TunnelHop lab", [wg_a, wg_b]),
-    "bundle-all.zip": ("TunnelHop lab", [wg_a, wg_b, ovpn]),
-    "bundle-auth.zip": ("TunnelHop lab (sign-in)", [wg_a, ovpn_auth]),
-    "bundle-hostile.zip": ("Hostile bundle (must be refused)", [evil_wg, evil_ovpn]),
+    "bundle-wg.zip": ("TunnelHop lab", [wg_a, wg_b], {}),
+    "bundle-all.zip": ("TunnelHop lab", [wg_a, wg_b, ovpn], {}),
+    "bundle-auth.zip": ("TunnelHop lab (sign-in)", [wg_a, ovpn_auth], {}),
+    "bundle-authfile.zip": (
+        "TunnelHop lab (auth.txt)",
+        [wg_a, ovpn_file],
+        {"openvpn/auth.txt": AUTH_TXT},
+    ),
+    "bundle-hostile.zip": ("Hostile bundle (must be refused)", [evil_wg, evil_ovpn], {}),
 }
-for name, (bundle_name, profiles) in bundles.items():
+for name, (bundle_name, profiles, extras) in bundles.items():
     manifest = {
         "schema_version": "1",
         "bundle_name": bundle_name,
@@ -69,4 +88,6 @@ for name, (bundle_name, profiles) in bundles.items():
         bundle.writestr("manifest.json", json.dumps(manifest, indent=2))
         for entry, text in profiles:
             bundle.writestr(entry["file"], text)
+        for path, text in extras.items():
+            bundle.writestr(path, text)
 print("bundles:", ", ".join(bundles))
