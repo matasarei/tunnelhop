@@ -1319,3 +1319,75 @@ async fn a_runtime_installed_after_the_start_is_noticed_and_used() {
     lab.orchestrator.tick(start + Duration::from_secs(60)).await;
     assert_eq!(looks.load(std::sync::atomic::Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn a_tunnel_lost_on_a_runtime_found_later_is_replaced() {
+    let log = CallLog::default();
+    let missing = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Missing,
+    };
+    let available = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Available {
+            version: "1.1.1".into(),
+        },
+    };
+    // The driver the look hands over; kept here to make it report a lost tunnel.
+    let late = Arc::new(MockDriver::new(log.clone()));
+    let discover: Discover = {
+        let (late, available) = (late.clone(), available.clone());
+        Arc::new(move |_| (available.clone(), Some(late.clone() as Arc<dyn VpnDriver>)))
+    };
+    let lab = lab_from(
+        tempfile::tempdir().unwrap(),
+        false,
+        log,
+        vec![missing],
+        HashMap::new(),
+        Some(discover),
+    )
+    .await;
+    let bundle_id = imported_and_selected(&lab).await;
+
+    // The watch runs as in the service: its first tick finds the runtime.
+    let watch = lab.orchestrator.spawn_watch();
+    let until = |what: &'static str, done: Box<dyn Fn() -> bool>| async move {
+        for _ in 0..300 {
+            if done() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("timed out waiting until {what}");
+    };
+    let orchestrator = lab.orchestrator.clone();
+    until(
+        "the runtime is found",
+        Box::new(move || orchestrator.report().runtimes == std::slice::from_ref(&available)),
+    )
+    .await;
+    assert_eq!(connect(&lab, "wg-a").await.state, State::Connected);
+    lab.log.take();
+
+    let id = th_core::bundle::BundleId::parse(&bundle_id).unwrap();
+    late.emit(TunnelEvent::Down {
+        tunnel: tunnel_name(&id, "wg-a"),
+        reason: "test".into(),
+    });
+
+    let seen = lab.log.clone();
+    let reconnects = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let kept = reconnects.clone();
+    until(
+        "the lost tunnel is replaced",
+        Box::new(move || {
+            let mut kept = kept.lock().unwrap();
+            kept.extend(seen.take());
+            kept.iter().any(|e: &String| e.starts_with("connect:"))
+        }),
+    )
+    .await;
+    assert_eq!(lab.orchestrator.report().state, State::Connected);
+    watch.abort();
+}
