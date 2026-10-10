@@ -30,6 +30,7 @@
 
   async function save(event: Event) {
     event.preventDefault();
+    if (saving || !username || !password) return;
     saving = true;
     error = null;
     try {
@@ -41,6 +42,12 @@
     } finally {
       saving = false;
     }
+  }
+
+  // Fluent's inputs keep the real input element in a shadow root, so the form's own
+  // submit-on-Enter never fires: Enter is handled here.
+  function onkeydown(event: KeyboardEvent) {
+    if (event.key === "Enter") save(event);
   }
 
   function cancel() {
@@ -66,6 +73,7 @@
       <fluent-text-input
         value={username}
         oninput={(e: Event) => (username = value(e))}
+        {onkeydown}
         required
         autocomplete="off"
         spellcheck="false"
@@ -74,6 +82,7 @@
         type="password"
         value={password}
         oninput={(e: Event) => (password = value(e))}
+        {onkeydown}
         required
         autocomplete="off"
       >Password</fluent-text-input>
