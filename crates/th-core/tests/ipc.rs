@@ -59,6 +59,10 @@ fn every_message_round_trips() {
         Request::SelectBundle {
             bundle_id: "0123456789abcdef".into(),
         },
+        Request::ListBundles,
+        Request::DeleteBundle {
+            bundle_id: "0123456789abcdef".into(),
+        },
         Request::Connect { profile_id: None },
         Request::Connect {
             profile_id: Some("ua-wg-01".into()),
@@ -96,6 +100,14 @@ fn every_message_round_trips() {
         },
         Response::ImportFailed {
             errors: vec!["openvpn/a.ovpn:3: directive \"up\" is not allowed".into()],
+        },
+        Response::Bundles {
+            bundles: vec![report().bundle.unwrap()],
+            active: Some("0123456789abcdef".into()),
+        },
+        Response::Bundles {
+            bundles: Vec::new(),
+            active: None,
         },
         Response::Ok,
         Response::Error {
@@ -191,6 +203,21 @@ fn requests_are_validated() {
         .is_err(),
         "bundle ids are lowercase"
     );
+    assert!(
+        Request::DeleteBundle {
+            bundle_id: "..\\..\\windows".into()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        Request::DeleteBundle {
+            bundle_id: "0123456789abcdef".into()
+        }
+        .validate()
+        .is_ok()
+    );
+    assert!(Request::ListBundles.validate().is_ok());
     assert!(
         Request::Connect {
             profile_id: Some(String::new())

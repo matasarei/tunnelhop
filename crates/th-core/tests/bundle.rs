@@ -131,6 +131,38 @@ fn bundle_ids_parse_only_in_their_own_shape() {
 }
 
 #[test]
+fn installed_bundles_are_listed_and_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("bundles");
+    assert_eq!(bundle::installed(&root).unwrap(), [], "no store yet");
+
+    let a = bundle::import(&valid_bundle(vec![]), &root).unwrap().id;
+    let b = bundle::import(
+        &valid_bundle(vec![Entry::File("openvpn/extra.txt", b"x".to_vec())]),
+        &root,
+    )
+    .unwrap()
+    .id;
+    // What is not a bundle's directory is not listed: staging, a stray file with an id's name.
+    fs::create_dir(root.join(".staging-0123456789abcdef")).unwrap();
+    fs::create_dir(root.join("notes")).unwrap();
+    fs::write(root.join("fedcba9876543210"), b"a file").unwrap();
+
+    let mut expected = vec![a.clone(), b.clone()];
+    expected.sort_by(|x, y| x.as_str().cmp(y.as_str()));
+    assert_eq!(bundle::installed(&root).unwrap(), expected);
+
+    bundle::remove(&root, &a).unwrap();
+    assert_eq!(bundle::installed(&root).unwrap(), std::slice::from_ref(&b));
+    assert!(bundle::open(&root, &a).is_err());
+    assert!(
+        bundle::open(&root, &b).is_ok(),
+        "the other bundle is untouched"
+    );
+    bundle::remove(&root, &a).unwrap();
+}
+
+#[test]
 fn garbage_is_not_a_zip() {
     assert_refused(b"definitely not a zip", "not a valid zip archive");
 }

@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use th_core::bundle::{self, BundleId, ImportedBundle};
+use th_core::bundle::{self, BundleId, ImportedBundle, MAX_BUNDLES};
 use th_core::driver::{ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelHandle, VpnDriver};
-use th_core::ipc::{self, Event, Request, Response, RuntimeInfo, StatusReport};
+use th_core::ipc::{self, BundleInfo, Event, Request, Response, RuntimeInfo, StatusReport};
 use th_core::manifest::Protocol;
 use th_core::rotation::{KillSwitch, Overrides, Probe, Resolver, Rotator, State, Status, Trigger};
 use th_core::sanitize::Endpoint;
@@ -225,8 +225,10 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
     pub async fn handle(&self, request: Request) -> Response {
         // From the cached report, before the lock: a rotation holds the lock for as long as a
         // tunnel takes to connect, and the UI must not freeze meanwhile.
-        if request == Request::GetStatus {
-            return self.status();
+        match request {
+            Request::GetStatus => return self.status(),
+            Request::ListBundles => return self.list(),
+            _ => {}
         }
         let mut inner = self.inner.lock().await;
         let now = Instant::now();
@@ -234,6 +236,8 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Request::GetStatus => self.status(),
             Request::ImportBundle { zip_base64 } => self.import(&inner, &zip_base64).await,
             Request::SelectBundle { bundle_id } => self.select(&mut inner, &bundle_id).await,
+            Request::ListBundles => self.list(),
+            Request::DeleteBundle { bundle_id } => self.delete(&mut inner, &bundle_id).await,
             Request::Connect { profile_id } => {
                 if inner.active.is_none() {
                     return error("import and select a bundle first");
@@ -317,6 +321,19 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Err(e) => return error(e),
         };
         let root = self.layout.bundles();
+        // The same zip again is not another bundle, so it is never what the cap refuses.
+        match bundle::installed(&root) {
+            Ok(installed)
+                if installed.len() >= MAX_BUNDLES && !installed.contains(&BundleId::of(&bytes)) =>
+            {
+                return error(format!(
+                    "{MAX_BUNDLES} bundles are installed, the most TunnelHop keeps: delete a \
+                     bundle first"
+                ));
+            }
+            Ok(_) => {}
+            Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
+        }
         let imported =
             match tokio::task::spawn_blocking(move || bundle::import(&bytes, &root)).await {
                 Ok(Ok(imported)) => imported,
@@ -378,6 +395,75 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         inner.active = Some(Active { bundle, rotator });
         self.publish(inner);
         self.status()
+    }
+
+    /// Every installed bundle, ordered by name, and the active one's id. The active id comes
+    /// from the cached report, so this never waits for a rotation in progress.
+    fn list(&self) -> Response {
+        let root = self.layout.bundles();
+        let ids = match bundle::installed(&root) {
+            Ok(ids) => ids,
+            Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
+        };
+        let mut bundles: Vec<BundleInfo> = ids
+            .iter()
+            .map(|id| match bundle::open(&root, id) {
+                Ok(bundle) => bundle_info(id, &bundle.manifest, &bundle.needs_credentials, |p| {
+                    self.credentials.has(id, p)
+                }),
+                // Still listed, so that it can be deleted.
+                Err(errors) => {
+                    log::warn!("installed bundle {id} cannot be opened: {errors:?}");
+                    BundleInfo {
+                        bundle_id: id.as_str().to_string(),
+                        bundle_name: "Damaged bundle".into(),
+                        profiles: Vec::new(),
+                    }
+                }
+            })
+            .collect();
+        bundles.sort_by_cached_key(|b| (b.bundle_name.to_lowercase(), b.bundle_id.clone()));
+        Response::Bundles {
+            bundles,
+            active: self.report().bundle.map(|b| b.bundle_id),
+        }
+    }
+
+    /// Remove a bundle: its stored credentials first, then its files. The active bundle is
+    /// disconnected before anything is removed, and no bundle is active afterwards.
+    async fn delete(&self, inner: &mut Inner, bundle_id: &str) -> Response {
+        let Some(id) = BundleId::parse(bundle_id) else {
+            return error("bundle id must be 16 lowercase hex characters");
+        };
+        let root = self.layout.bundles();
+        match bundle::installed(&root) {
+            Ok(installed) if installed.contains(&id) => {}
+            Ok(_) => return error(format!("bundle {id} is not installed")),
+            Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
+        }
+        if inner.active.as_ref().is_some_and(|a| a.bundle.id == id) {
+            if let Err(e) = self.disconnect(inner).await {
+                self.publish(inner);
+                return error(format!(
+                    "could not disconnect, so the bundle was not deleted: {e}"
+                ));
+            }
+            inner.active = None;
+            inner.settings.active_bundle = None;
+            inner.settings.selected_profile = None;
+            self.save(&inner.settings);
+            self.publish(inner);
+        }
+        if let Err(e) = self.credentials.remove_bundle(&id) {
+            return error(format!(
+                "the bundle's credentials could not be removed, so it was not deleted: {e}"
+            ));
+        }
+        if let Err(e) = bundle::remove(&root, &id) {
+            return error(format!("the bundle's files could not be removed: {e}"));
+        }
+        log::info!("deleted bundle {id}");
+        self.list()
     }
 
     async fn rotate(&self, inner: &mut Inner, trigger: Trigger, now: Instant) -> Response {

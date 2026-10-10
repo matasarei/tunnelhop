@@ -16,6 +16,8 @@ pub const USAGE: &str = "usage: th-service ctl <command>
   status                      the service's state
   import <bundle.zip>         import a bundle (prints its id)
   select <bundle id>          make an imported bundle the active one
+  bundles                     every installed bundle, and the active one
+  delete <bundle id>          delete an installed bundle and its credentials
   connect [profile]           connect to a profile, or a random one
   rotate                      rotate now
   disconnect                  disconnect and lift the kill-switch
@@ -35,6 +37,10 @@ pub fn request(arguments: &[String]) -> Result<Option<Request>, String> {
             }
         }
         ["select", id] => Request::SelectBundle {
+            bundle_id: id.to_string(),
+        },
+        ["bundles"] => Request::ListBundles,
+        ["delete", id] => Request::DeleteBundle {
             bundle_id: id.to_string(),
         },
         ["connect"] => Request::Connect { profile_id: None },
@@ -146,6 +152,13 @@ mod tests {
             request(&args("auto off")),
             Ok(Some(Request::SetAutoRotate { enabled: false }))
         );
+        assert_eq!(request(&args("bundles")), Ok(Some(Request::ListBundles)));
+        assert_eq!(
+            request(&args("delete 0123456789abcdef")),
+            Ok(Some(Request::DeleteBundle {
+                bundle_id: "0123456789abcdef".into()
+            }))
+        );
         assert_eq!(request(&args("watch")), Ok(None));
     }
 
@@ -158,6 +171,8 @@ mod tests {
             "interval 0",
             "auto maybe",
             "select ../x",
+            "delete ../x",
+            "delete",
             "connect UPPER",
             "import",
         ] {

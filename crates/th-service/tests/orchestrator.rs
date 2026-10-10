@@ -535,3 +535,225 @@ async fn selecting_another_bundle_first_leaves_the_current_one() {
         "a profile of the old bundle is forgotten"
     );
 }
+
+/// Import the lab bundle under another name, which makes it another bundle; returns its id.
+async fn imported_as(lab: &Lab, name: &str) -> String {
+    let manifest = MANIFEST.replace(
+        r#""bundle_name": "Lab""#,
+        &format!(r#""bundle_name": "{name}""#),
+    );
+    let response = lab
+        .orchestrator
+        .handle(Request::ImportBundle {
+            zip_base64: ipc::encode_zip(&bundle_zip(&manifest)),
+        })
+        .await;
+    match response {
+        Response::Imported { bundle, .. } => bundle.bundle_id,
+        other => panic!("importing {name:?} failed: {other:?}"),
+    }
+}
+
+/// A `Bundles` answer as (name, id) pairs in the order given, and the active id.
+fn listed(response: Response) -> (Vec<(String, String)>, Option<String>) {
+    match response {
+        Response::Bundles { bundles, active } => (
+            bundles
+                .into_iter()
+                .map(|b| (b.bundle_name, b.bundle_id))
+                .collect(),
+            active,
+        ),
+        other => panic!("expected the bundles, got {other:?}"),
+    }
+}
+
+async fn delete(lab: &Lab, bundle_id: &str) -> Response {
+    lab.orchestrator
+        .handle(Request::DeleteBundle {
+            bundle_id: bundle_id.to_string(),
+        })
+        .await
+}
+
+#[tokio::test]
+async fn installed_bundles_are_listed_by_name_with_the_active_one_marked() {
+    let lab = lab().await;
+    assert_eq!(
+        listed(lab.orchestrator.handle(Request::ListBundles).await),
+        (Vec::new(), None)
+    );
+
+    let zeta = imported_as(&lab, "Zeta").await;
+    let alpha = imported_as(&lab, "alpha").await;
+    report(
+        lab.orchestrator
+            .handle(Request::SelectBundle {
+                bundle_id: zeta.clone(),
+            })
+            .await,
+    );
+
+    let response = lab.orchestrator.handle(Request::ListBundles).await;
+    let Response::Bundles { bundles, .. } = &response else {
+        panic!("{response:?}");
+    };
+    let flags: Vec<_> = bundles[0]
+        .profiles
+        .iter()
+        .map(|p| (p.id.as_str(), p.has_credentials))
+        .collect();
+    assert_eq!(flags, [("wg-a", true), ("wg-b", true), ("ovpn", false)]);
+    assert_eq!(
+        listed(response),
+        (
+            vec![("alpha".into(), alpha), ("Zeta".into(), zeta.clone())],
+            Some(zeta)
+        )
+    );
+}
+
+#[tokio::test]
+async fn deleting_another_bundle_leaves_the_tunnel_alone() {
+    let lab = lab().await;
+    let active = imported_and_selected(&lab).await;
+    report(
+        lab.orchestrator
+            .handle(Request::Connect {
+                profile_id: Some("wg-a".into()),
+            })
+            .await,
+    );
+    let other = imported_as(&lab, "Other lab").await;
+    report(
+        lab.orchestrator
+            .handle(Request::SetCredentials {
+                bundle_id: other.clone(),
+                profile_ids: Vec::new(),
+                username: "user".into(),
+                password: Secret::new("secret"),
+            })
+            .await,
+    );
+    assert!(lab.layout.credentials().join(&other).is_dir());
+    lab.log.take();
+
+    let (bundles, still_active) = listed(delete(&lab, &other).await);
+    assert_eq!(bundles, [("Lab".to_string(), active.clone())]);
+    assert_eq!(still_active, Some(active));
+    assert!(lab.log.take().is_empty(), "the tunnel was not touched");
+    assert!(!lab.layout.bundles().join(&other).exists());
+    assert!(
+        !lab.layout.credentials().join(&other).exists(),
+        "its credentials go with it"
+    );
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Connected);
+
+    let again = delete(&lab, &other).await;
+    assert!(is_error(&again, "not installed"), "{again:?}");
+}
+
+#[tokio::test]
+async fn deleting_the_active_bundle_disconnects_first_and_leaves_none_active() {
+    let lab = lab().await;
+    let active = imported_and_selected(&lab).await;
+    report(
+        lab.orchestrator
+            .handle(Request::Connect {
+                profile_id: Some("wg-a".into()),
+            })
+            .await,
+    );
+    lab.log.take();
+
+    assert_eq!(listed(delete(&lab, &active).await), (Vec::new(), None));
+    let log = lab.log.take();
+    assert!(log.contains(&"disconnect:wg-a".to_string()), "{log:?}");
+    assert!(log.contains(&"disengage".to_string()), "{log:?}");
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert_eq!(status.state, State::Disconnected);
+    assert!(!status.killswitch_engaged);
+    assert!(status.bundle.is_none());
+    let saved = Settings::load(&lab.layout.settings_file()).unwrap();
+    assert_eq!(saved.active_bundle, None);
+    assert_eq!(saved.selected_profile, None);
+    let response = lab.orchestrator.handle(Request::RotateNow).await;
+    assert!(is_error(&response, "select a bundle"), "{response:?}");
+
+    // A restart finds nothing to reopen.
+    let lab = lab_in(lab._dir, false).await;
+    let status = report(lab.orchestrator.handle(Request::GetStatus).await);
+    assert!(status.bundle.is_none());
+}
+
+#[tokio::test]
+async fn a_bundle_whose_tunnel_cannot_be_brought_down_is_not_deleted() {
+    let log = CallLog::default();
+    let driver = Arc::new(MockDriver::new(log.clone()));
+    let lab = lab_with(tempfile::tempdir().unwrap(), false, log, driver.clone()).await;
+    let active = imported_and_selected(&lab).await;
+    report(
+        lab.orchestrator
+            .handle(Request::Connect {
+                profile_id: Some("wg-a".into()),
+            })
+            .await,
+    );
+    driver.fail_disconnect(true);
+
+    let response = delete(&lab, &active).await;
+    assert!(is_error(&response, "was not deleted"), "{response:?}");
+    assert!(lab.layout.bundles().join(&active).is_dir());
+    let (bundles, still_active) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(bundles, [("Lab".to_string(), active.clone())]);
+    assert_eq!(still_active, Some(active));
+}
+
+#[tokio::test]
+async fn a_21st_bundle_is_refused_but_an_installed_one_imports_again() {
+    let lab = lab().await;
+    let mut ids = Vec::new();
+    for n in 0..th_core::bundle::MAX_BUNDLES {
+        ids.push(imported_as(&lab, &format!("Lab {n}")).await);
+    }
+    let one_more = MANIFEST.replace(r#""bundle_name": "Lab""#, r#""bundle_name": "One more""#);
+    let import = || async {
+        lab.orchestrator
+            .handle(Request::ImportBundle {
+                zip_base64: ipc::encode_zip(&bundle_zip(&one_more)),
+            })
+            .await
+    };
+
+    let response = import().await;
+    assert!(is_error(&response, "delete a bundle first"), "{response:?}");
+    assert_eq!(
+        std::fs::read_dir(lab.layout.bundles()).unwrap().count(),
+        th_core::bundle::MAX_BUNDLES,
+        "nothing of the refused bundle was written"
+    );
+    assert_eq!(
+        imported_as(&lab, "Lab 0").await,
+        ids[0],
+        "already installed"
+    );
+
+    listed(delete(&lab, &ids[7]).await);
+    let response = import().await;
+    assert!(
+        matches!(response, Response::Imported { .. }),
+        "{response:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_damaged_bundle_is_listed_so_that_it_can_be_deleted() {
+    let lab = lab().await;
+    let id = imported_as(&lab, "Lab").await;
+    std::fs::remove_file(lab.layout.bundles().join(&id).join("manifest.json")).unwrap();
+
+    let (bundles, _) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(bundles, [("Damaged bundle".to_string(), id.clone())]);
+    assert_eq!(listed(delete(&lab, &id).await), (Vec::new(), None));
+}
