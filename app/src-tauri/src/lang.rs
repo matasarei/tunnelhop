@@ -320,6 +320,21 @@ mod tests {
         );
     }
 
+    /// Every Windows has a display language. An empty list would mean the call failed, and
+    /// the app would then speak English to everyone without a word in any log.
+    #[cfg(windows)]
+    #[test]
+    fn windows_names_its_display_languages() {
+        let languages = system();
+        assert!(!languages.is_empty());
+        for language in &languages {
+            assert!(
+                language.len() >= 2 && language.is_ascii(),
+                "not a language tag: {language:?}"
+            );
+        }
+    }
+
     #[test]
     fn tests_read_english() {
         assert_eq!(current(), ENGLISH);
