@@ -22,7 +22,10 @@ use crate::edit::MAX_CONFIG_BYTES;
 use crate::manifest::Protocol;
 use crate::rotation::State;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Raised whenever a request, response or event is added or changed: a client and a service
+/// from different versions then refuse each other at `Hello` instead of failing later on a
+/// message one of them cannot parse.
+pub const PROTOCOL_VERSION: u32 = 2;
 /// Largest line either side accepts: a maximal bundle in base64 plus the envelope.
 pub const MAX_FRAME_BYTES: usize = MAX_ZIP_BYTES / 3 * 4 + 64 * 1024;
 
