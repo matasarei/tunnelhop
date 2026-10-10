@@ -36,6 +36,8 @@
         report = e.payload;
         // A tunnel up again answers the last alert.
         if (e.payload?.state === "connected") alert = null;
+        // The bundle waiting for "Switch now" became the active one some other way.
+        if (pendingSwitch && e.payload?.bundle?.bundle_id === pendingSwitch.bundle_id) pendingSwitch = null;
       }),
       listen<string>("alert", (e) => (alert = e.payload)),
       // Files dropped on the window arrive as paths; the Rust side reads the file.
@@ -176,7 +178,11 @@
   {#if pendingSwitch}
     {@const bundle = pendingSwitch}
     <fluent-message-bar intent="info" layout="multiline">
-      Switching to "{bundle.bundle_name}" disconnects the current tunnel and lifts the block first.
+      {#if engaged}
+        Switching to "{bundle.bundle_name}" disconnects the current tunnel and lifts the block first.
+      {:else}
+        "{bundle.bundle_name}" is installed, but not the bundle in use.
+      {/if}
       <fluent-button slot="actions" size="small" disabled={busy} onclick={() => switchTo(bundle)}>Switch now</fluent-button>
       <fluent-button slot="dismiss" appearance="transparent" size="small" aria-label="Dismiss" onclick={() => (pendingSwitch = null)}>✕</fluent-button>
     </fluent-message-bar>
