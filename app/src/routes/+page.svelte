@@ -132,6 +132,13 @@
     await run(() => ipc.selectBundle(bundle.bundle_id));
   }
 
+  /** Close the question, then act on a yes. The question is taken before it is cleared. */
+  function answer(yes: boolean) {
+    const question = confirming;
+    confirming = null;
+    if (yes) question?.run();
+  }
+
   const leavesTunnel = "The current tunnel is disconnected and the block is lifted first.";
 
   /** Switch from the bundles list: asked about first when it would drop a tunnel or a block. */
@@ -183,7 +190,9 @@
           ? "Traffic is blocked until a tunnel is up, or you unblock."
           : report.bundle
             ? "Not protected. Connect to pick a server."
-            : "Import a bundle to get started.",
+            : bundles?.bundles.length
+              ? "No bundle is in use. Switch to one below."
+              : "Import a bundle to get started.",
   );
   // A bundle may set an interval the menu does not offer; show it rather than a blank choice.
   const intervalChoices = $derived(
@@ -356,11 +365,8 @@
     title={question.title}
     message={question.message}
     action={question.action}
-    onconfirm={() => {
-      confirming = null;
-      question.run();
-    }}
-    oncancel={() => (confirming = null)}
+    onconfirm={() => answer(true)}
+    oncancel={() => answer(false)}
   />
 {/if}
 
