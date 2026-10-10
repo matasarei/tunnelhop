@@ -40,6 +40,13 @@ pub enum Request {
     SelectBundle {
         bundle_id: String,
     },
+    /// Every installed bundle, and which one is active.
+    ListBundles,
+    /// Remove an installed bundle and its stored credentials. The active one is disconnected
+    /// first, and no bundle is active afterwards.
+    DeleteBundle {
+        bundle_id: String,
+    },
     /// Connect to this profile, or to a random one when `None`.
     Connect {
         profile_id: Option<String>,
@@ -99,7 +106,9 @@ impl Request {
             Request::SetInterval { minutes } if !(1..=1440).contains(minutes) => Err(
                 IpcError::Invalid("interval must be between 1 and 1440 minutes".into()),
             ),
-            Request::SelectBundle { bundle_id } => check_bundle_id(bundle_id),
+            Request::SelectBundle { bundle_id } | Request::DeleteBundle { bundle_id } => {
+                check_bundle_id(bundle_id)
+            }
             Request::Connect {
                 profile_id: Some(id),
             } => check_profile_id(id),
@@ -192,6 +201,11 @@ pub enum Response {
     },
     ImportFailed {
         errors: Vec<String>,
+    },
+    /// The installed bundles, ordered by name, and the id of the active one.
+    Bundles {
+        bundles: Vec<BundleInfo>,
+        active: Option<String>,
     },
     Ok,
     Error {

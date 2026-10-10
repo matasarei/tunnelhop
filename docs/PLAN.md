@@ -354,7 +354,25 @@ step (or per closely related pair), opened as a PR against `main`.
     - Found on the way: Enter did not save the dialog (Fluent's inputs sit in a shadow root, so
       the form never submits by itself); fixed.
     - Not checked by me: drag-and-drop, which needs a mouse.
-27. [ ] Bundle management: list, switch and delete installed bundles (SPEC §3.5).
+27. [x] Bundle management: list, switch and delete installed bundles (SPEC §3.5).
+    - Landed: `bundle::installed` and `bundle::remove` in th-core; `ListBundles`,
+      `DeleteBundle` and the 20-bundle cap in the orchestrator; `ctl bundles` and
+      `ctl delete`; the app's `list_bundles` and `delete_bundle` commands; `Bundles.svelte`
+      and `Confirm.svelte` in the window. "Import bundle…" moved to the Bundles heading.
+    - Ruling: a bundle that no longer opens is still listed, as "Damaged bundle" with no
+      servers, so that it can be deleted. Cost if wrong: one odd row.
+    - Ruling: a delete removes the credentials before the files, so a failure halfway leaves
+      a bundle that is still listed, never secrets for a bundle nobody can see.
+    - Ruling: Switch from the list asks first only while a tunnel or the block is up; Delete
+      always asks.
+    - Checked in `th-test` by keyboard: deleting a bundle not in use left the tunnel up;
+      Switch while connected asked, then disconnected and switched; deleting the bundle in
+      use while connected disconnected, lifted the block and left no bundle active, with its
+      files and credentials gone. Found there: a confirmed question was dropped before it
+      ran; fixed.
+    - Not checked in the VM: the cap (covered by an orchestrator test), and a damaged bundle.
+    - Noticed, not changed: two bundles with the same name can only be told apart by their
+      server count.
     - IPC: `ListBundles` (every bundle, the active one marked) and `DeleteBundle { bundle_id }`.
       Deleting the active bundle disconnects first. At most 20 installed; a 21st import is
       refused. Settles `.tasks/feature-orchestrator-followups.md` item 1.
@@ -380,6 +398,9 @@ step (or per closely related pair), opened as a PR against `main`.
       the UI, connect to it, then remove it, with the leak capture running throughout.
 19. [ ] NSIS installer hooks (service install and uninstall, full cleanup) and
     `docs/TESTING.md` covering every acceptance criterion.
+    - Decide here: requests were added in steps 27 and 28 with `PROTOCOL_VERSION` still 1.
+      Either bump it whenever requests are added, or have the installer guarantee that the
+      app and the service are always replaced together.
     - Create: `app/src-tauri/windows/hooks.nsh`, `docs/TESTING.md`
     - Modify: `app/src-tauri/tauri.conf.json` (`bundle.windows.nsis.installerHooks`,
       `th-service.exe` as a resource)
@@ -603,4 +624,6 @@ Still open:
   minutes, and steps 27 and 28 (bundle management, editing servers) were planned.
 - **2026-10-10:** step 17 merged (PR #13). Step 18, the server list, bundle import and the
   credentials prompt, landed on `feature/dashboard-import` and was checked in `th-test`.
-- **Next:** step 27, bundle management; then 28 and 19.
+- **2026-10-10:** step 18 merged (PR #14). Step 27, bundle management, landed on
+  `feature/bundle-management` and was checked in `th-test`.
+- **Next:** step 28, editing a bundle's servers; then 19.

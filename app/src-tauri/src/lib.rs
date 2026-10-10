@@ -2,6 +2,7 @@
 //! It holds no state of its own beyond the last status report: every change goes to the
 //! service as a request, and what the app shows comes back as the service's next report.
 
+pub mod bundles;
 pub mod import;
 pub mod pipe_client;
 pub mod tray;
@@ -21,6 +22,7 @@ mod app {
     use tauri_plugin_notification::NotificationExt;
     use th_core::ipc::{Event, Request, Response, Secret, StatusReport};
 
+    use crate::bundles::BundleList;
     use crate::import::{ImportOutcome, outcome, read_bundle};
 
     use crate::pipe_client::{Options, ServiceClient, Update};
@@ -267,6 +269,21 @@ mod app {
         send(&app, Request::SelectBundle { bundle_id }).await
     }
 
+    /// Every installed bundle, and which one is active.
+    #[tauri::command]
+    async fn list_bundles(app: AppHandle) -> Result<BundleList, String> {
+        let client = app.state::<AppState>().client.clone();
+        crate::bundles::list(client.request(Request::ListBundles).await?)
+    }
+
+    /// Delete an installed bundle and its stored credentials; the list that is left comes
+    /// back. The service disconnects first when the bundle is the active one.
+    #[tauri::command]
+    async fn delete_bundle(app: AppHandle, bundle_id: String) -> Result<BundleList, String> {
+        let client = app.state::<AppState>().client.clone();
+        crate::bundles::list(client.request(Request::DeleteBundle { bundle_id }).await?)
+    }
+
     /// Store a username and password for a bundle's OpenVPN profiles: the listed ones, or every
     /// one as the bundle's default when the list is empty. The password is a `Secret` from the
     /// moment it is deserialized: never logged, wiped when dropped.
@@ -346,6 +363,8 @@ mod app {
                 intervals,
                 import_bundle,
                 select_bundle,
+                list_bundles,
+                delete_bundle,
                 set_credentials
             ])
             .setup(|app| {

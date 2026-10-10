@@ -7,7 +7,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::io::{Cursor, Read};
+use std::io::{self, Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -21,6 +21,8 @@ pub const MAX_ZIP_BYTES: usize = 20 * 1024 * 1024;
 pub const MAX_ENTRIES: usize = 500;
 pub const MAX_UNCOMPRESSED_BYTES: u64 = 50 * 1024 * 1024;
 pub const MAX_COMPRESSION_RATIO: u64 = 100;
+/// The most bundles installed at once (SPEC §3.5).
+pub const MAX_BUNDLES: usize = 20;
 
 const MANIFEST_FILE: &str = "manifest.json";
 const STAGING_PREFIX: &str = ".staging-";
@@ -181,6 +183,35 @@ pub fn open(root: &Path, id: &BundleId) -> Result<ImportedBundle, Vec<ImportErro
         needs_credentials: prepared.needs_credentials,
         already_present: true,
     })
+}
+
+/// The id of every installed bundle, sorted. Anything else under `root` (a staging directory, a
+/// stray file) is not a bundle.
+pub fn installed(root: &Path) -> io::Result<Vec<BundleId>> {
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e),
+    };
+    let mut ids = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if let Some(id) = entry.file_name().to_str().and_then(BundleId::parse)
+            && entry.file_type()?.is_dir()
+        {
+            ids.push(id);
+        }
+    }
+    ids.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    Ok(ids)
+}
+
+/// Delete an installed bundle's files. A bundle that is not there is not an error.
+pub fn remove(root: &Path, id: &BundleId) -> io::Result<()> {
+    match fs::remove_dir_all(root.join(id.as_str())) {
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
 }
 
 fn read_installed_manifest(dir: &Path) -> Result<Manifest, Vec<ImportError>> {
