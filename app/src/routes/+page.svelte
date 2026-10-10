@@ -73,7 +73,15 @@
 
   /** Import the dropped file, or one from the native picker when no path is given. */
   async function importFrom(path?: string) {
-    if (busy || !report) return;
+    // The button is disabled in both cases; a drop is not, and must not vanish without a word.
+    if (!report) {
+      error = "The TunnelHop service is not running, so the bundle was not imported.";
+      return;
+    }
+    if (busy) {
+      error = "The bundle was not imported: another request was still running. Drop it again.";
+      return;
+    }
     importErrors = null;
     notice = null;
     const outcome = await run(() => ipc.importBundle(path));
