@@ -1,6 +1,6 @@
 <script lang="ts">
-  // The active bundle's servers: connect to one, and see which cannot be used yet (waiting for
-  // credentials, or a runtime that is missing or too old) and why.
+  // The active bundle's servers: connect to one, remove one, and see which cannot be used yet
+  // (waiting for credentials, or a runtime that is missing or too old) and why.
   import { protocolName, runtimeProblem, type Profile, type Report } from "$lib/ipc";
 
   let {
@@ -8,11 +8,13 @@
     busy,
     onconnect,
     oncredentials,
+    onremove,
   }: {
     report: Report;
     busy: boolean;
     onconnect: (profile: Profile) => void;
     oncredentials: (profile: Profile) => void;
+    onremove: (profile: Profile) => void;
   } = $props();
 
   const profiles = $derived(report.bundle?.profiles ?? []);
@@ -42,6 +44,18 @@
         {:else}
           <fluent-button size="small" appearance="subtle" disabled={busy} onclick={() => onconnect(profile)}>
             Connect
+          </fluent-button>
+        {/if}
+        <!-- A bundle keeps at least one server: the last one goes with the bundle. -->
+        {#if profiles.length > 1}
+          <fluent-button
+            size="small"
+            appearance="subtle"
+            disabled={busy}
+            aria-label={`Remove ${profile.name}`}
+            onclick={() => onremove(profile)}
+          >
+            Remove
           </fluent-button>
         {/if}
       </div>

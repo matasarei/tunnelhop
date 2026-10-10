@@ -66,6 +66,20 @@ export const listBundles = () => invoke<BundleList>("list_bundles");
 /** Delete a bundle and its saved sign-in; the list that is left comes back. */
 export const deleteBundle = (bundleId: string) => invoke<BundleList>("delete_bundle", { bundleId });
 
+/** A config file to add as a server, and the name the server will show under. */
+export type ChosenFile = { path: string; name: string };
+
+/** The dropped config files, or ones chosen in the native picker; empty when it was closed. */
+export const chooseServers = (paths?: string[]) =>
+  invoke<ChosenFile[]>("choose_servers", { paths: paths ?? null });
+
+/** Add servers to a bundle. It is replaced by a new bundle, as an import would make it. */
+export const addServers = (bundleId: string, files: ChosenFile[]) =>
+  invoke<ImportOutcome>("add_servers", { bundleId, files });
+
+export const removeServers = (bundleId: string, profileIds: string[]) =>
+  invoke<ImportOutcome>("remove_servers", { bundleId, profileIds });
+
 /** For the listed profiles, or as the bundle's default for every one when the list is empty. */
 export const setCredentials = (
   bundleId: string,
