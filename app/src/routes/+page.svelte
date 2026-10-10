@@ -13,6 +13,7 @@
   import RuntimeHelp from "$lib/RuntimeHelp.svelte";
   import Servers from "$lib/Servers.svelte";
   import { followSystemTheme } from "$lib/fluent";
+  import { sentences, t, tn } from "$lib/i18n";
   import * as ipc from "$lib/ipc";
   import type { Action, Bundle, BundleList, Profile, Protocol, Report } from "$lib/ipc";
 
@@ -25,7 +26,7 @@
   let notice = $state<string | null>(null);
   let importErrors = $state<string[] | null>(null);
   /** What the errors above stopped: an import, or an edit of the servers. */
-  let refusedWhat = $state("The bundle was not imported.");
+  let refusedWhat = $state(t("refused.import"));
   /**
    * Config files chosen to become servers, waiting for their names to be confirmed: of the
    * bundle in use, or (null) of a new bundle when none is.
@@ -89,7 +90,7 @@
           // tried as a bundle.
           if (paths.length > 0 && paths.every((path) => /\.(conf|ovpn)$/i.test(path))) chooseServers(paths);
           else if (paths.length === 1) importFrom(paths[0]);
-          else error = "Drop .conf and .ovpn files to add as servers, or one .zip of them.";
+          else error = t("error.drop");
         }
       }),
     ];
@@ -118,11 +119,11 @@
   async function importFrom(path?: string) {
     // The button is disabled in both cases; a drop is not, and must not vanish without a word.
     if (!report) {
-      error = "The TunnelHop service is not running, so the bundle was not imported.";
+      error = t("error.import.no_service");
       return;
     }
     if (busy) {
-      error = "The bundle was not imported: another request was still running. Drop it again.";
+      error = t("error.import.busy");
       return;
     }
     importErrors = null;
@@ -130,20 +131,22 @@
     const outcome = await run(() => ipc.importBundle(path));
     if (!outcome || outcome.type === "cancelled") return;
     if (outcome.type === "refused") {
-      refusedWhat = "The bundle was not imported.";
+      refusedWhat = t("refused.import");
       importErrors = outcome.errors;
       return;
     }
-    await installed(outcome, "Imported");
+    await installed(outcome, "notice.imported");
   }
 
   /** What follows a bundle that was just installed: say so, put it in use, ask for sign-in. */
-  async function installed(outcome: Extract<ipc.ImportOutcome, { type: "imported" }>, verb: string) {
+  async function installed(
+    outcome: Extract<ipc.ImportOutcome, { type: "imported" }>,
+    how: "notice.imported" | "notice.created",
+  ) {
     const { bundle } = outcome;
-    const count = bundle.profiles.length;
     notice = outcome.already_present
-      ? `"${bundle.bundle_name}" is already installed.`
-      : `${verb} "${bundle.bundle_name}" (${count} ${count === 1 ? "server" : "servers"}).`;
+      ? t("notice.already", { bundle: bundle.bundle_name })
+      : tn(how, bundle.profiles.length, { bundle: bundle.bundle_name });
     if (report?.bundle?.bundle_id !== bundle.bundle_id) {
       // Switching disconnects the current bundle first: with a tunnel up, that is the user's call.
       if (report?.state === "disconnected") await run(() => ipc.selectBundle(bundle.bundle_id));
@@ -159,12 +162,12 @@
    */
   async function chooseServers(paths?: string[]) {
     if (!report) {
-      error = "The TunnelHop service is not running, so the servers were not added.";
+      error = t("error.servers.no_service");
       return;
     }
     const bundle = report.bundle;
     if (busy) {
-      error = "The servers were not added: another request was still running. Drop them again.";
+      error = t("error.servers.busy");
       return;
     }
     const files = await run(() => ipc.chooseServers(paths));
@@ -195,19 +198,24 @@
     const outcome = await run(() => ipc.createBundle(name, files));
     if (!outcome || outcome.type === "cancelled") return;
     if (outcome.type === "refused") {
-      refusedWhat = "The bundle was not created.";
+      refusedWhat = t("refused.create");
       importErrors = outcome.errors;
       return;
     }
-    await installed(outcome, "Created");
+    await installed(outcome, "notice.created");
   }
 
   function addServers(bundle: Bundle, files: ipc.ChosenFile[]) {
     adding = null;
-    const what = files.length === 1 ? `"${files[0].name || "the server"}"` : `${files.length} servers`;
+    const added = (to: string) =>
+      files.length > 1
+        ? tn("notice.added", files.length, { bundle: to })
+        : files[0].name
+          ? t("notice.added.named", { name: files[0].name, bundle: to })
+          : t("notice.added.unnamed", { bundle: to });
     edit(
-      files.length === 1 ? "The server was not added." : "The servers were not added.",
-      (edited) => `Added ${what} to "${edited.bundle_name}".`,
+      tn("refused.add", files.length),
+      (edited) => added(edited.bundle_name),
       () => ipc.addServers(bundle.bundle_id, files),
     );
   }
@@ -216,19 +224,18 @@
     const bundle = report?.bundle;
     if (!bundle) return;
     const inUse = connected && report?.profile_id === profile.id;
-    const moves = inUse
-      ? "You are connected through it: TunnelHop moves to another server first. "
-      : connected
-        ? "The tunnel reconnects once. "
-        : "";
     confirming = {
-      title: `Remove "${profile.name}"?`,
-      message: `${moves}${connected ? "The block stays in place meanwhile. " : ""}It is removed from "${bundle.bundle_name}" with its saved sign-in.`,
-      action: "Remove",
+      title: t("confirm.remove.title", { name: profile.name }),
+      message: sentences(
+        inUse ? t("confirm.remove.moves") : connected && t("confirm.remove.reconnects"),
+        connected && t("confirm.block_stays"),
+        t("confirm.remove.result", { bundle: bundle.bundle_name }),
+      ),
+      action: t("action.remove"),
       run: () =>
         edit(
-          "The server was not removed.",
-          (edited) => `Removed "${profile.name}" from "${edited.bundle_name}".`,
+          t("refused.remove"),
+          (edited) => t("notice.removed", { name: profile.name, bundle: edited.bundle_name }),
           () => ipc.removeServers(bundle.bundle_id, [profile.id]),
         ),
     };
@@ -246,15 +253,13 @@
     if (yes) question?.run();
   }
 
-  const leavesTunnel = "The current tunnel is disconnected and the block is lifted first.";
-
   /** Switch from the bundles list: asked about first when it would drop a tunnel or a block. */
   function askSwitch(bundle: Bundle) {
     if (!engaged) return void switchTo(bundle);
     confirming = {
-      title: `Switch to "${bundle.bundle_name}"?`,
-      message: `${leavesTunnel} Traffic is not protected until you connect again.`,
-      action: "Switch",
+      title: t("confirm.switch.title", { bundle: bundle.bundle_name }),
+      message: sentences(t("confirm.leaves_tunnel"), t("confirm.switch.unprotected")),
+      action: t("action.switch"),
       run: () => switchTo(bundle),
     };
   }
@@ -262,9 +267,9 @@
   function askDelete(bundle: Bundle) {
     const inUse = bundles?.active === bundle.bundle_id && engaged;
     confirming = {
-      title: `Delete "${bundle.bundle_name}"?`,
-      message: `${inUse ? `${leavesTunnel} ` : ""}Its servers and saved sign-in are removed from this PC. This cannot be undone.`,
-      action: "Delete",
+      title: t("confirm.delete.title", { bundle: bundle.bundle_name }),
+      message: sentences(inUse && t("confirm.leaves_tunnel"), t("confirm.delete.result")),
+      action: t("action.delete"),
       run: () => remove(bundle),
     };
   }
@@ -274,7 +279,7 @@
     const left = await run(() => ipc.deleteBundle(bundle.bundle_id));
     if (!left) return void refreshBundles();
     bundles = left;
-    notice = `Deleted "${bundle.bundle_name}".`;
+    notice = t("notice.deleted", { bundle: bundle.bundle_name });
     if (pendingSwitch?.bundle_id === bundle.bundle_id) pendingSwitch = null;
   }
 
@@ -295,25 +300,37 @@
     report?.bundle?.profiles.find((p) => p.id === report?.profile_id)?.name ?? report?.profile_id ?? null,
   );
   const title = $derived(
-    !report ? "Service not running" : connected ? "Connected" : blocked ? "Blocked" : "Disconnected",
+    !report
+      ? t("tray.status.unreachable")
+      : connected
+        ? t("status.connected")
+        : blocked
+          ? t("tray.status.blocked")
+          : t("tray.status.disconnected"),
   );
   const subtitle = $derived(
     !report
-      ? "Start the TunnelHop service to connect."
+      ? t("status.hint.unreachable")
       : connected
         ? [profileName, report.public_ip].filter(Boolean).join(" · ")
         : blocked
-          ? "Traffic is blocked until a tunnel is up, or you unblock."
+          ? t("status.hint.blocked")
           : report.bundle
-            ? "Not protected. Connect to pick a server."
+            ? t("status.hint.disconnected")
             : bundles?.bundles.length
-              ? "No bundle is in use. Switch to one below."
-              : "Add your VPN config files to get started.",
+              ? t("status.hint.no_bundle")
+              : t("status.hint.empty"),
   );
   // A bundle may set an interval the menu does not offer; show it rather than a blank choice.
   const intervalChoices = $derived(
     report && !intervals.some(([m]) => m === report!.interval_minutes)
-      ? [...intervals, [report.interval_minutes, `${report.interval_minutes} min (from the bundle)`] as [number, string]]
+      ? [
+          ...intervals,
+          [
+            report.interval_minutes,
+            t("interval.from_bundle", { label: t("interval.minutes", { n: report.interval_minutes }) }),
+          ] as [number, string],
+        ]
       : intervals,
   );
 </script>
@@ -326,49 +343,49 @@
 <main>
   {#if !reachable}
     <fluent-message-bar intent="warning" layout="multiline">
-      The TunnelHop service is not running. The app reconnects to it on its own.
+      {t("bar.unreachable")}
     </fluent-message-bar>
   {/if}
   {#if alert}
     <fluent-message-bar intent="error" layout="multiline">
       {alert}
-      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (alert = null)}>{@render cross()}</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label={t("bar.dismiss")} onclick={() => (alert = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if error}
     <fluent-message-bar intent="error" layout="multiline">
       {error}
-      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (error = null)}>{@render cross()}</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label={t("bar.dismiss")} onclick={() => (error = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if importErrors}
     <fluent-message-bar intent="error" layout="multiline">
       <div>
         <strong>{refusedWhat}</strong>
-        {importErrors.length === 1 ? "One problem was found:" : `${importErrors.length} problems were found:`}
+        {tn("bar.problems", importErrors.length)}
         <ul class="errors">
           {#each importErrors as line}<li>{line}</li>{/each}
         </ul>
       </div>
-      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (importErrors = null)}>{@render cross()}</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label={t("bar.dismiss")} onclick={() => (importErrors = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if notice}
     <fluent-message-bar intent="success" layout="multiline">
       {notice}
-      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (notice = null)}>{@render cross()}</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label={t("bar.dismiss")} onclick={() => (notice = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
   {#if pendingSwitch}
     {@const bundle = pendingSwitch}
     <fluent-message-bar intent="info" layout="multiline">
       {#if engaged}
-        Switching to "{bundle.bundle_name}" disconnects the current tunnel and lifts the block first.
+        {t("bar.switch.engaged", { bundle: bundle.bundle_name })}
       {:else}
-        "{bundle.bundle_name}" is installed, but not the bundle in use.
+        {t("bar.switch.idle", { bundle: bundle.bundle_name })}
       {/if}
-      <fluent-button slot="actions" size="small" disabled={busy} onclick={() => switchTo(bundle)}>Switch now</fluent-button>
-      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label="Dismiss" onclick={() => (pendingSwitch = null)}>{@render cross()}</fluent-button>
+      <fluent-button slot="actions" size="small" disabled={busy} onclick={() => switchTo(bundle)}>{t("bar.switch.now")}</fluent-button>
+      <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label={t("bar.dismiss")} onclick={() => (pendingSwitch = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
 
@@ -391,23 +408,23 @@
   <div class="actions">
     {#if connected || blocked}
       <fluent-button appearance="primary" disabled={!report?.bundle || busy} onclick={() => act({ type: "rotate" })}>
-        Rotate now
+        {t("action.rotate")}
       </fluent-button>
     {:else}
       <fluent-button appearance="primary" disabled={!report?.bundle || busy} onclick={() => act({ type: "connect" })}>
-        Connect
+        {t("action.connect")}
       </fluent-button>
     {/if}
     <fluent-button disabled={!engaged || busy} onclick={() => act({ type: "disconnect" })}>
-      Disconnect &amp; unblock
+      {t("action.disconnect")}
     </fluent-button>
-    {#if busy}<fluent-spinner size="tiny" aria-label="Working"></fluent-spinner>{/if}
+    {#if busy}<fluent-spinner size="tiny" aria-label={t("action.working")}></fluent-spinner>{/if}
   </div>
 
   {#if report?.bundle}
     <div class="heading">
-      <h2>Servers in {report.bundle.bundle_name}</h2>
-      <fluent-button size="small" disabled={busy} onclick={() => chooseServers()}>Add server…</fluent-button>
+      <h2>{t("servers.heading", { bundle: report.bundle.bundle_name })}</h2>
+      <fluent-button size="small" disabled={busy} onclick={() => chooseServers()}>{t("servers.add_single")}</fluent-button>
     </div>
     <Servers
       {report}
@@ -420,57 +437,54 @@
   {/if}
 
   <div class="heading">
-    <h2>Bundles</h2>
+    <h2>{t("bundles.heading")}</h2>
     <div class="buttons">
       {#if reachable && !report?.bundle}
-        <fluent-button size="small" disabled={busy} onclick={() => chooseServers()}>Add servers…</fluent-button>
+        <fluent-button size="small" disabled={busy} onclick={() => chooseServers()}>{t("servers.add_several")}</fluent-button>
       {/if}
-      <fluent-button size="small" disabled={!reachable || busy} onclick={() => importFrom()}>Import bundle…</fluent-button>
+      <fluent-button size="small" disabled={!reachable || busy} onclick={() => importFrom()}>{t("bundles.import")}</fluent-button>
     </div>
   </div>
   {#if bundles && bundles.bundles.length > 0}
     <Bundles list={bundles} {busy} onswitch={askSwitch} ondelete={askDelete} />
   {:else if listFailed}
-    <section class="card empty">The installed bundles could not be listed.</section>
+    <section class="card empty">{t("bundles.list_failed")}</section>
   {:else if reachable}
-    <section class="card empty">
-      No servers yet. Add the <code>.conf</code> (WireGuard) or <code>.ovpn</code> (OpenVPN) files from your VPN
-      provider, or drop them on this window. A <code>.zip</code> of them, or a prepared TunnelHop bundle, works too.
-    </section>
+    <section class="card empty">{t("bundles.empty")}</section>
   {:else}
-    <section class="card empty">The installed bundles appear here once the service is running.</section>
+    <section class="card empty">{t("bundles.waiting")}</section>
   {/if}
 
-  <h2>Details</h2>
+  <h2>{t("details.heading")}</h2>
   <section class="card rows">
-    <div class="row"><span class="label">Public IP</span><span>{report?.public_ip ?? "—"}</span></div>
+    <div class="row"><span class="label">{t("details.ip")}</span><span>{report?.public_ip ?? "—"}</span></div>
     <div class="row">
-      <span class="label">Kill-switch</span>
-      <span>{report?.killswitch_engaged ? "On: traffic outside the tunnel is blocked" : "Off"}</span>
+      <span class="label">{t("details.killswitch")}</span>
+      <span>{report?.killswitch_engaged ? t("details.killswitch.on") : t("details.killswitch.off")}</span>
     </div>
   </section>
 
-  <h2>Rotation</h2>
+  <h2>{t("rotation.heading")}</h2>
   <section class="card rows">
     <div class="row">
       <div>
-        <div class="label-strong">Auto-rotation</div>
-        <div class="hint">Hop to another server on a timer</div>
+        <div class="label-strong">{t("rotation.auto")}</div>
+        <div class="hint">{t("rotation.auto.hint")}</div>
       </div>
       <fluent-switch
         checked={report?.auto_rotate ?? false}
         disabled={!reachable || busy}
-        aria-label="Auto-rotation"
+        aria-label={t("rotation.auto")}
         onchange={(e: Event) => act({ type: "set_auto_rotate", enabled: (e.currentTarget as HTMLInputElement).checked })}
       ></fluent-switch>
     </div>
     <div class="row">
       <div>
-        <div class="label-strong">Interval</div>
-        <div class="hint">How often to hop while auto-rotation is on</div>
+        <div class="label-strong">{t("rotation.interval")}</div>
+        <div class="hint">{t("rotation.interval.hint")}</div>
       </div>
       <fluent-dropdown
-        aria-label="Interval"
+        aria-label={t("rotation.interval")}
         disabled={!reachable || busy}
         onchange={(e: Event) => act({ type: "set_interval", minutes: Number((e.currentTarget as HTMLSelectElement).value) })}
       >
@@ -484,8 +498,8 @@
   </section>
 
   <footer>
-    <fluent-button appearance="subtle" onclick={() => act({ type: "exit" })}>Exit TunnelHop</fluent-button>
-    <span class="hint">Disconnects, lifts the block, and closes the app. Closing the window keeps it in the tray.</span>
+    <fluent-button appearance="subtle" onclick={() => act({ type: "exit" })}>{t("exit.button")}</fluent-button>
+    <span class="hint">{t("exit.hint")}</span>
   </footer>
 </main>
 
@@ -521,7 +535,7 @@
 {/if}
 
 {#if dragging}
-  <div class="drop" aria-hidden="true"><div>Drop config files to add as servers, or a <code>.zip</code> to import it</div></div>
+  <div class="drop" aria-hidden="true"><div>{t("drop.overlay")}</div></div>
 {/if}
 
 <style>

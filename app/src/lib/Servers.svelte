@@ -1,6 +1,7 @@
 <script lang="ts">
   // The active bundle's servers: connect to one, remove one, and see which cannot be used yet
   // (waiting for credentials, or a runtime that is missing or too old) and why.
+  import { t } from "$lib/i18n";
   import { protocolName, runtimeProblem, type Profile, type Report } from "$lib/ipc";
 
   let {
@@ -36,20 +37,20 @@
       </div>
       <div class="what">
         {#if current}
-          <fluent-badge appearance="tint" color="success">Connected</fluent-badge>
+          <fluent-badge appearance="tint" color="success">{t("status.connected")}</fluent-badge>
         {:else if problem}
-          <button class="why" aria-label={`Why ${profile.name} is unavailable`} onclick={() => onwhy(profile)}>
-            <fluent-badge appearance="tint" color="severe">Unavailable</fluent-badge>
-            <span class="more" aria-hidden="true">Why?</span>
+          <button class="why" aria-label={t("servers.why_label", { name: profile.name })} onclick={() => onwhy(profile)}>
+            <fluent-badge appearance="tint" color="severe">{t("servers.unavailable")}</fluent-badge>
+            <span class="more" aria-hidden="true">{t("servers.why")}</span>
           </button>
         {:else if !profile.has_credentials}
-          <fluent-badge appearance="tint" color="warning">Needs sign-in</fluent-badge>
+          <fluent-badge appearance="tint" color="warning">{t("servers.needs_signin")}</fluent-badge>
           <fluent-button size="small" disabled={busy} onclick={() => oncredentials(profile)}>
-            Sign in…
+            {t("servers.signin")}
           </fluent-button>
         {:else}
           <fluent-button size="small" appearance="subtle" disabled={busy} onclick={() => onconnect(profile)}>
-            Connect
+            {t("action.connect")}
           </fluent-button>
         {/if}
         <!-- A bundle keeps at least one server: the last one goes with the bundle. -->
@@ -58,10 +59,10 @@
             size="small"
             appearance="subtle"
             disabled={busy}
-            aria-label={`Remove ${profile.name}`}
+            aria-label={t("servers.remove_label", { name: profile.name })}
             onclick={() => onremove(profile)}
           >
-            Remove
+            {t("action.remove")}
           </fluent-button>
         {/if}
       </div>

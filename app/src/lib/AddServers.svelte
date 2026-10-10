@@ -3,6 +3,7 @@
   // under: of the bundle in use, or of a new bundle when there is none. Nothing has been read
   // yet: the files are read when the button is pressed.
   import { untrack } from "svelte";
+  import { sentences, t, tn } from "$lib/i18n";
   import type { Bundle, ChosenFile } from "$lib/ipc";
 
   let {
@@ -25,7 +26,7 @@
   let dialog: (HTMLElement & { show(): void; hide(): void }) | undefined = $state();
   // The names start as offered and are the user's from then on.
   let names = $state(untrack(() => files.map((file) => file.name)));
-  let bundleName = $state("My servers");
+  let bundleName = $state(t("add.default_name"));
   let answered = false;
 
   $effect(() => {
@@ -53,13 +54,13 @@
   }
 </script>
 
-<fluent-dialog bind:this={dialog} type="modal" aria-label={bundle ? "Add servers" : "New bundle"} {ontoggle}>
+<fluent-dialog bind:this={dialog} type="modal" aria-label={bundle ? t("picker.servers.title") : t("add.label.bundle")} {ontoggle}>
   <fluent-dialog-body>
     <div slot="title">
       {#if bundle}
-        {files.length === 1 ? "Add a server" : `Add ${files.length} servers`} to {bundle.bundle_name}
+        {tn("add.title", files.length, { bundle: bundle.bundle_name })}
       {:else}
-        New bundle from {files.length === 1 ? "a config file" : `${files.length} config files`}
+        {tn("add.new_title", files.length)}
       {/if}
     </div>
     {#if !bundle}
@@ -71,7 +72,7 @@
         maxlength="100"
         autocomplete="off"
         spellcheck="false"
-      >Bundle name</fluent-text-input>
+      >{t("add.bundle_name")}</fluent-text-input>
     {/if}
     <div class="files">
       {#each files as file, i (file.path)}
@@ -85,13 +86,9 @@
         >{fileName(file.path)}</fluent-text-input>
       {/each}
     </div>
-    <p class="hint">
-      The name is what the server list shows. Each file is checked like an imported bundle; a
-      file that could run a program is refused.
-      {#if reconnects}The tunnel reconnects once; the block stays in place meanwhile.{/if}
-    </p>
-    <fluent-button slot="action" appearance="primary" onclick={add}>{bundle ? "Add" : "Create"}</fluent-button>
-    <fluent-button slot="action" onclick={oncancel}>Cancel</fluent-button>
+    <p class="hint">{sentences(t("add.hint"), reconnects && t("add.reconnects"))}</p>
+    <fluent-button slot="action" appearance="primary" onclick={add}>{bundle ? t("action.add") : t("action.create")}</fluent-button>
+    <fluent-button slot="action" onclick={oncancel}>{t("action.cancel")}</fluent-button>
   </fluent-dialog-body>
 </fluent-dialog>
 

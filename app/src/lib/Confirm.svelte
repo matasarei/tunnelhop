@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { t } from "$lib/i18n";
+
   // A yes/no question before something that cannot be undone, or that drops the tunnel.
   let {
     title,
@@ -38,7 +40,7 @@
     <div slot="title">{title}</div>
     <p>{message}</p>
     <fluent-button slot="action" appearance="primary" onclick={confirm}>{action}</fluent-button>
-    <fluent-button slot="action" onclick={oncancel}>Cancel</fluent-button>
+    <fluent-button slot="action" onclick={oncancel}>{t("action.cancel")}</fluent-button>
   </fluent-dialog-body>
 </fluent-dialog>
 
