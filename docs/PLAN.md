@@ -319,7 +319,7 @@ step (or per closely related pair), opened as a PR against `main`.
       worked, and the window followed the service live, including after a service restart.
     - **Also from the first look:** the default interval is now 60 minutes, and the menus offer
       15 min, 30 min, 1 h, 2 h and 4 h. Steps 27 and 28 were added.
-18. [ ] The dashboard and import: drag-and-drop or picker, bytes over the pipe, the error list.
+18. [x] The dashboard and import: drag-and-drop or picker, bytes over the pipe, the error list.
     - Also: when `Imported.needs_credentials` is non-empty, ask once for a username and
       password for all of them. The profile list marks any profile still waiting, with an
       action to set them.
@@ -329,6 +329,31 @@ step (or per closely related pair), opened as a PR against `main`.
     - Every error from the service shows in the window (SPEC §5).
     - Create: `app/src/routes/Dashboard.svelte`, `app/src/lib/Import.svelte`, `app/src/lib/ipc.ts`
     - Test: `npm run check`, plus importing good and hostile bundles in the VM.
+    - **Landed (2026-10-10):**
+      - Rust: `import.rs` (reads the picked or dropped file, with size and type checks before
+        reading), and the `import_bundle`, `select_bundle` and `set_credentials` commands.
+      - Page: `lib/ipc.ts` (typed commands), `lib/Servers.svelte` (the list, with Connect,
+        "Needs sign-in" and "Unavailable"), `lib/Credentials.svelte` (the dialog), and the
+        import with its messages in `routes/+page.svelte`.
+      - Ruling: the dashboard stays in `+page.svelte` (the window has one page), and the import
+        is a few functions there rather than its own component; the list and the dialog are
+        the parts that earned a file. Cost if wrong: a file is split later.
+      - Ruling: an import while connected does not switch bundles by itself, because
+        switching disconnects first, which lifts the block. The window offers "Switch now".
+        Cost if wrong: one extra click.
+      - Lab: `test-infra/bundles.py` builds the test bundles, with two new ones:
+        `bundle-auth.zip` (needs credentials) and `bundle-hostile.zip` (must be refused).
+    - **Checked in `th-test`, driving the app by keyboard:**
+      - `bundle-hostile.zip` is refused with its three errors by file and line (`PostUp`,
+        `script-security`, `up`).
+      - `bundle-auth.zip` imports, becomes active, and opens the credentials prompt.
+      - The lab password (with a quote and a backslash) saved from the dialog connects
+        "Lab OpenVPN (sign-in)": public IP `172.31.77.13`.
+      - Importing while connected keeps the tunnel and offers "Switch now".
+      - Exit disconnects and lifts the block.
+    - Found on the way: Enter did not save the dialog (Fluent's inputs sit in a shadow root, so
+      the form never submits by itself); fixed.
+    - Not checked by me: drag-and-drop, which needs a mouse.
 27. [ ] Bundle management: list, switch and delete installed bundles (SPEC §3.5).
     - IPC: `ListBundles` (every bundle, the active one marked) and `DeleteBundle { bundle_id }`.
       Deleting the active bundle disconnects first. At most 20 installed; a 21st import is
@@ -576,4 +601,6 @@ Still open:
 - **2026-10-07:** step 16 merged (PR #12). Step 17, the app shell, landed on
   `feature/app-shell` and was checked by hand in `th-test`. The default interval became 60
   minutes, and steps 27 and 28 (bundle management, editing servers) were planned.
-- **Next:** step 18, the dashboard and import; then 27, 28 and 19.
+- **2026-10-10:** step 17 merged (PR #13). Step 18, the server list, bundle import and the
+  credentials prompt, landed on `feature/dashboard-import` and was checked in `th-test`.
+- **Next:** step 27, bundle management; then 28 and 19.
