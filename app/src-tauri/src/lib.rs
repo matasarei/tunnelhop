@@ -239,9 +239,12 @@ mod app {
         let path = match path {
             Some(path) => std::path::PathBuf::from(path),
             None => {
-                let picked = app
-                    .dialog()
-                    .file()
+                let mut dialog = app.dialog().file();
+                // Owned by the window, so the picker cannot end up behind it.
+                if let Some(window) = app.get_webview_window("main") {
+                    dialog = dialog.set_parent(&window);
+                }
+                let picked = dialog
                     .set_title("Import a TunnelHop bundle")
                     .add_filter("TunnelHop bundle", &["zip"])
                     .blocking_pick_file();
