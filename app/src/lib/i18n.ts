@@ -1,17 +1,39 @@
 // The window's text, in the language the Rust side chose from Windows' display language. The
 // texts are the files under `locales`, one per language, which the tray reads too. Only the
 // app's own text is here: what the service says arrives in English and is shown as it is.
+import de from "../../locales/de.json";
 import en from "../../locales/en.json";
+import es from "../../locales/es.json";
+import fr from "../../locales/fr.json";
+import it from "../../locales/it.json";
+import ja from "../../locales/ja.json";
+import pl from "../../locales/pl.json";
+import ptBR from "../../locales/pt-BR.json";
+import uk from "../../locales/uk.json";
+import zhHans from "../../locales/zh-Hans.json";
 
 /** Every text the app has. English is the list the other languages are checked against. */
 export type Key = keyof typeof en;
-type Texts = Record<Key, string>;
+/** A language has every text; of the forms for one thing, only those its numbers ask for. */
+type Texts = Record<Exclude<Key, `${string}_one`>, string> & Partial<Record<Key, string>>;
 
 /** A text with a form per number: `bundles.servers` for `bundles.servers_one`, `_other`, … */
 export type CountKey = CountBase<Key>;
 type CountBase<K> = K extends `${infer Base}_other` ? Base : never;
 
-const languages: Record<string, Texts> = { en };
+// Named as the Rust side names them: the file names under `locales`.
+const languages: Record<string, Texts> = {
+  en,
+  uk,
+  es,
+  fr,
+  de,
+  "pt-BR": ptBR,
+  it,
+  pl,
+  "zh-Hans": zhHans,
+  ja,
+};
 
 let texts: Texts = en;
 let plurals = new Intl.PluralRules("en");

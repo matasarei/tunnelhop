@@ -45,8 +45,8 @@
 
   "refused.import": "The bundle was not imported.",
   "refused.create": "The bundle was not created.",
-  "refused.add_one": "The server was not added.",
-  "refused.add_other": "The servers were not added.",
+  "refused.add_single": "The server was not added.",
+  "refused.add_several": "The servers were not added.",
   "refused.remove": "The server was not removed.",
 
   "error.drop": "Drop .conf and .ovpn files to add as servers, or one .zip of them.",

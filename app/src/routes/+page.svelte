@@ -214,7 +214,7 @@
           ? t("notice.added.named", { name: files[0].name, bundle: to })
           : t("notice.added.unnamed", { bundle: to });
     edit(
-      tn("refused.add", files.length),
+      t(files.length === 1 ? "refused.add_single" : "refused.add_several"),
       (edited) => added(edited.bundle_name),
       () => ipc.addServers(bundle.bundle_id, files),
     );

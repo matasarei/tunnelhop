@@ -12,9 +12,22 @@ use std::sync::OnceLock;
 pub const ENGLISH: &str = "en";
 
 /// Every language the app has, by the name of its file.
-pub const LANGUAGES: [&str; 1] = [ENGLISH];
+pub const LANGUAGES: [&str; 10] = [
+    ENGLISH, "uk", "es", "fr", "de", "pt-BR", "it", "pl", "zh-Hans", "ja",
+];
 
-const CATALOGUES: [(&str, &str); 1] = [(ENGLISH, include_str!("../../locales/en.json"))];
+const CATALOGUES: [(&str, &str); 10] = [
+    (ENGLISH, include_str!("../../locales/en.json")),
+    ("uk", include_str!("../../locales/uk.json")),
+    ("es", include_str!("../../locales/es.json")),
+    ("fr", include_str!("../../locales/fr.json")),
+    ("de", include_str!("../../locales/de.json")),
+    ("pt-BR", include_str!("../../locales/pt-BR.json")),
+    ("it", include_str!("../../locales/it.json")),
+    ("pl", include_str!("../../locales/pl.json")),
+    ("zh-Hans", include_str!("../../locales/zh-Hans.json")),
+    ("ja", include_str!("../../locales/ja.json")),
+];
 
 /// Set to one of [`LANGUAGES`] to see the app in it whatever Windows speaks: for checking a
 /// translation.
@@ -172,6 +185,8 @@ pub fn text(key: &str, values: &[(&str, &str)]) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
 
     #[test]
@@ -195,6 +210,113 @@ mod tests {
                 &[("profile", "{ip}"), ("ip", "203.0.113.7")]
             ),
             "Connected: {ip} (203.0.113.7)"
+        );
+    }
+
+    #[test]
+    fn the_language_follows_what_windows_prefers() {
+        for (preferred, language) in [
+            (vec!["uk-UA"], "uk"),
+            (vec!["uk"], "uk"),
+            (vec!["UK_ua"], "uk"),
+            (vec!["de-AT"], "de"),
+            (vec!["es-419"], "es"),
+            (vec!["fr-CA"], "fr"),
+            (vec!["it-IT"], "it"),
+            (vec!["pl-PL"], "pl"),
+            (vec!["ja-JP"], "ja"),
+            (vec!["en-GB"], "en"),
+            // One Portuguese for every region.
+            (vec!["pt-BR"], "pt-BR"),
+            (vec!["pt-PT"], "pt-BR"),
+            // Simplified Chinese however it is named; Traditional reads English.
+            (vec!["zh-CN"], "zh-Hans"),
+            (vec!["zh-Hans-SG"], "zh-Hans"),
+            (vec!["zh"], "zh-Hans"),
+            (vec!["zh-TW"], "en"),
+            (vec!["zh-Hant-HK"], "en"),
+            // The first language the app has wins, not the first one listed.
+            (vec!["ko-KR", "uk-UA", "de-DE"], "uk"),
+            (vec!["zh-TW", "ja-JP"], "ja"),
+            // Nothing the app has, nothing at all, or nonsense: English.
+            (vec!["ko-KR", "ar-SA"], "en"),
+            (vec![], "en"),
+            (vec!["", "-", "ukr"], "en"),
+        ] {
+            assert_eq!(pick(&preferred), language, "{preferred:?}");
+        }
+    }
+
+    /// `key` without the ending that names a plural form, and that ending.
+    fn plural(key: &str) -> (&str, Option<&str>) {
+        for form in ["_one", "_few", "_many", "_other"] {
+            if let Some(base) = key.strip_suffix(form) {
+                return (base, Some(&form[1..]));
+            }
+        }
+        (key, None)
+    }
+
+    fn placeholders(text: &str) -> BTreeSet<&str> {
+        text.split('{')
+            .skip(1)
+            .filter_map(|rest| rest.split_once('}'))
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    #[test]
+    fn every_language_has_every_text() {
+        let all = catalogues();
+        assert_eq!(all.len(), LANGUAGES.len());
+        let english = &all[ENGLISH];
+        let bases = |texts: &HashMap<String, String>| -> BTreeSet<String> {
+            texts.keys().map(|key| plural(key).0.to_string()).collect()
+        };
+        for language in LANGUAGES {
+            let texts = &all[language];
+            assert_eq!(bases(texts), bases(english), "the keys of {language}");
+            // The forms a number can ask for in each language (Unicode's plural rules).
+            let forms: &[&str] = match language {
+                "uk" | "pl" => &["one", "few", "many", "other"],
+                "zh-Hans" | "ja" => &["other"],
+                _ => &["one", "other"],
+            };
+            for (key, text) in texts {
+                assert!(!text.trim().is_empty(), "{language}: {key} is empty");
+                let (base, form) = plural(key);
+                // What the text may fill in is what English fills in; a plural form may
+                // leave the number out ("Add a server").
+                let source = match form {
+                    Some(_) => &english[&format!("{base}_other")],
+                    None => &english[key],
+                };
+                let mut wanted = placeholders(source);
+                let mut found = placeholders(text);
+                if form.is_some() {
+                    wanted.insert("n");
+                    found.insert("n");
+                }
+                assert_eq!(found, wanted, "{language}: the placeholders of {key}");
+                if form.is_some() {
+                    for form in forms {
+                        let needed = format!("{base}_{form}");
+                        assert!(
+                            texts.contains_key(&needed),
+                            "{language}: {needed} is missing"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_translation_is_used() {
+        assert_eq!(text_in("uk", "tray.status.blocked", &[]), "Заблоковано");
+        assert_eq!(
+            text_in("ja", "tray.status.connected", &[("profile", "ua-kyiv-01")]),
+            "接続済み: ua-kyiv-01"
         );
     }
 
