@@ -19,7 +19,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::bundle::MAX_ZIP_BYTES;
 use crate::edit::MAX_CONFIG_BYTES;
-use crate::manifest::Protocol;
+use crate::manifest::{MAX_NAME_CHARS, Protocol};
 use crate::rotation::State;
 
 /// Raised whenever a request, response or event is added or changed: a client and a service
@@ -171,8 +171,6 @@ impl ProfileFile {
 }
 
 const MAX_FILE_NAME_CHARS: usize = 255;
-/// The manifest's limit for a profile name.
-const MAX_NAME_CHARS: usize = 100;
 
 /// A value that must never reach a log: `Debug` prints a placeholder, and the memory is wiped
 /// when the value is dropped.
@@ -214,9 +212,9 @@ impl Request {
                 check_files(files)
             }
             Request::CreateBundle { name, files } => {
-                if name.chars().count() > MAX_BUNDLE_NAME_CHARS {
+                if name.chars().count() > MAX_NAME_CHARS {
                     return Err(IpcError::Invalid(format!(
-                        "a bundle's name is at most {MAX_BUNDLE_NAME_CHARS} characters"
+                        "a bundle's name is at most {MAX_NAME_CHARS} characters"
                     )));
                 }
                 check_files(files)
@@ -264,9 +262,6 @@ fn check_bundle_id(id: &str) -> Result<(), IpcError> {
         ))
     }
 }
-
-/// The manifest's limit on `bundle_name`, so a longer one is refused before a zip is built.
-const MAX_BUNDLE_NAME_CHARS: usize = 100;
 
 fn check_files(files: &[ProfileFile]) -> Result<(), IpcError> {
     if files.is_empty() || files.len() > crate::manifest::MAX_PROFILES {

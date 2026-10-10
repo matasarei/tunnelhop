@@ -137,8 +137,8 @@ pub fn create(name: &str, new: &[NewProfile]) -> Result<Vec<u8>, Vec<ImportError
     pack(&manifest, files)
 }
 
-/// When `zip_bytes` is a zip of bare config files (no `manifest.json` anywhere, at least one `.conf`
-/// or `.ovpn`), the bundle zip [`create`] makes of them; `None` for anything else, which is
+/// When `zip_bytes` is a zip of bare config files (no `manifest.json` anywhere, at least one
+/// `.conf` or `.ovpn`), the bundle zip [`create`] makes of them; `None` for anything else, which is
 /// the import's to judge. The files may sit in folders: only their own names are used.
 pub fn from_config_zip(zip_bytes: &[u8]) -> Option<Result<Vec<u8>, Vec<ImportError>>> {
     if zip_bytes.len() > MAX_ZIP_BYTES {
