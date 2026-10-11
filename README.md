@@ -13,7 +13,7 @@ leaves the PC outside the tunnel.
 ## What it does
 
 - **Rotates servers** at an interval you choose (15 minutes to 4 hours), or when you ask, and
-  makes sure the public IP actually changes.
+  checks that the public IP actually changed.
 - **Blocks traffic while it switches**, with its own Windows Filtering Platform kill-switch:
   nothing goes out between one tunnel and the next, or if a server stops answering.
 - **Takes your provider's files as they are**: WireGuard `.conf` files, recommended, or
