@@ -25,12 +25,12 @@ tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
-th-core = { version = "0.1.0", path = "../../crates/th-core" }
+th-core = { path = "../../crates/th-core" }
 tokio = { version = "1.53.2", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 
 [target."cfg(windows)".dependencies]
 # The pipe client that refuses a pipe not owned by SYSTEM or Administrators.
-th-service = { version = "0.1.0", path = "../../crates/th-service" }
+th-service = { path = "../../crates/th-service" }
 # The display languages the user chose in Windows.
 windows-sys = { version = "0.61.2", features = ["Win32_Globalization"] }
 

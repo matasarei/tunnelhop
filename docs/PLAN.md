@@ -687,6 +687,17 @@ step (or per closely related pair), opened as a PR against `main`.
       `ovpn_mgmt_live` pass. `svc_live` found that `sc.exe` answers in the display language;
       it reads the service manager instead.
 
+### Public release
+39. [x] Release builds from CI: a `v<version>` tag builds the installer on `windows-latest`
+    and attaches it, with `SHA256SUMS.txt`, to a draft GitHub Release (`release.yml`).
+    - Landed: the tag must match the version in `Cargo.toml`, `tauri.conf.json` and
+      `package.json`; the workspace tests run on the tagged commit; the shipped
+      `th-service.exe` is checked for the dev safety timer; only the small job that creates
+      the draft may write. DEVELOPMENT.md, "Cutting a release", has the procedure.
+    - Rulings: drafts only, published by a person (the installer is unsigned); Node 24
+      through `actions/setup-node`, the version the app is developed and tested with, not
+      whatever the runner ships. Code signing is not planned.
+
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
   (on the PC, and on CI for every PR)

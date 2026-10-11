@@ -73,7 +73,8 @@ and every test before each push; it takes about a minute, against ~16 minutes fo
 Windows CI build billed at twice the Linux rate. CI keeps only what a developer's machine
 cannot vouch for: `th-core` on Linux (about a minute) and, when service code changes, the
 Windows release gate (the release binary must not contain the dev safety timer). Both have
-hard timeouts (5 and 10 minutes), and a new push cancels the run of the previous one.
+hard timeouts (5 and 10 minutes), and a new push cancels the run of the previous one. A
+version tag also builds the installer for a draft release ("Cutting a release" below).
 
 If the Windows display language isn't English, local group names are translated. Refer to
 groups by SID instead (`S-1-5-32-578` is Hyper-V Administrators), and add your account to that
@@ -304,6 +305,35 @@ cd app; npm run installer; cd ..  # -> target\release\bundle\nsis\TunnelHop_<ver
   at the end. A black image means the display is asleep: send a key through `Msvm_Keyboard`.
 - The "Config files not found" pop-up at sign-in is OpenVPN GUI, installed with OpenVPN. It is
   not TunnelHop's; disable it under Task Manager → Startup apps.
+
+### Cutting a release
+
+Releases are built by CI (`.github/workflows/release.yml`), not on the PC, so what ships is
+built from the tagged commit and nothing else.
+
+1. Pass the installer pass in TESTING.md §3 with the commit you mean to release.
+2. Set the new version in all three places: `Cargo.toml` (`[workspace.package]`) and
+   `app/src-tauri/tauri.conf.json` by hand, and `app/package.json` with
+   `npm version <version> --no-git-tag-version` in `app/`, so that `package-lock.json` follows.
+   Run `cargo build` once so that `Cargo.lock` follows too. Merge that change through a pull
+   request like any other.
+3. Tag the merge commit on `main` and push the tag:
+   ```powershell
+   git switch main; git pull
+   git tag -a v0.2.0 -m "TunnelHop 0.2.0"; git push origin v0.2.0
+   ```
+4. The workflow checks that the tag matches the three versions, runs `cargo test --workspace`,
+   builds the installer, checks the service has no dev safety timer, and creates a **draft**
+   release with
+   `TunnelHop_<version>_x64-setup.exe` and `SHA256SUMS.txt`.
+5. Read the draft on GitHub (Releases): edit the notes, and install the attached installer in
+   `th-test` if this commit wasn't the one tested in step 1. Then publish it.
+
+A failed run creates no release. Fix the cause, delete the tag
+(`git push origin :refs/tags/v0.2.0`, `git tag -d v0.2.0`), and tag again. If the run got as
+far as a draft, delete that draft too before tagging again, so only one is left. The installer is
+not code-signed, so Windows SmartScreen warns on first run; the user guide says how to get past
+that.
 
 ## 6. The leak test (steps 14 and 16)
 
