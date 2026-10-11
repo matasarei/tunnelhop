@@ -468,8 +468,11 @@ step (or per closely related pair), opened as a PR against `main`.
     decoding 20 MB just to discard it, or hand the decoded bytes back to the caller.
 22. [ ] `crates/th-core/src/rotation.rs` (`Rotator::settle`): don't ignore the steady-state
     `engage` result; log it or surface it in `Status`.
-23. [ ] `.github/workflows/ci.yml`: pin actions by commit SHA and add
+23. [x] `.github/workflows/ci.yml`: pin actions by commit SHA and add
     `permissions: contents: read`.
+    - Landed: both workflows, `release-gate.yml` too, before the repository goes public
+      (audit 2026-10-11). The pins keep the versions in use: `actions/checkout` v4.4.0 and
+      `Swatinem/rust-cache` v2.9.2.
 
 ### Added after checking real ProtonVPN files
 24. [x] OpenVPN credentials when the config has none (core part). The service, management and
