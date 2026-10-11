@@ -12,7 +12,8 @@ leaves the PC outside the tunnel.
 
 ## What it does
 
-- **Rotates servers** at an interval you choose (15 minutes to 4 hours), or when you ask, and
+- **Rotates servers** at an interval you choose (15 minutes to 4 hours in the tray menu), or
+  when you ask, and
   checks that the public IP actually changed.
 - **Blocks traffic while it switches**, with its own Windows Filtering Platform kill-switch:
   nothing goes out between one tunnel and the next, or if a server stops answering.
