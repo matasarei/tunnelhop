@@ -9,6 +9,7 @@ import it from "../../locales/it.json";
 import ja from "../../locales/ja.json";
 import pl from "../../locales/pl.json";
 import ptBR from "../../locales/pt-BR.json";
+import ru from "../../locales/ru.json";
 import uk from "../../locales/uk.json";
 import zhHans from "../../locales/zh-Hans.json";
 
@@ -25,6 +26,7 @@ type CountBase<K> = K extends `${infer Base}_other` ? Base : never;
 const languages: Record<string, Texts> = {
   en,
   uk,
+  ru,
   es,
   fr,
   de,

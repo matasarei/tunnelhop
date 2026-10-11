@@ -336,14 +336,16 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
 
 - **Window:** closing it hides it to the tray.
 - **Language:** the app's own text (the window, its dialogs, the tray menu, the file pickers
-  and its own messages, such as a file it cannot read or a service it cannot reach) is shown in the first of the user's Windows display languages the app
-  has: English, Ukrainian, Spanish, French, German, Portuguese, Italian, Polish, Simplified
-  Chinese or Japanese; English otherwise. It is decided when the app starts. The texts are
+  and its own messages, such as a file it cannot read or a service it cannot reach) is shown
+  in the first of the user's Windows display languages the app has: English, Ukrainian,
+  Russian, Spanish, French, German, Portuguese, Italian, Polish, Simplified Chinese or
+  Japanese; English otherwise. It is decided when the app starts. The texts are
   `app/locales/<tag>.json`, one file per language, read by the window and the tray alike.
   What the service says (why a connect failed, the lines of an import error, an alert) is
-  English and shown as it is, in the window and in notifications alike, as are `th-service`'s command line and the logs. The menu and
-  messages below are given in English. The installer and the uninstaller follow Windows'
-  language the same way, in the same ten languages.
+  English and shown as it is, in the window and in notifications alike, as are
+  `th-service`'s command line and the logs. The menu and messages below are given in
+  English. The installer and the uninstaller follow Windows' language the same way, in the
+  same eleven languages.
 - **Dashboard:** bundle, profile, protocol, public IP, state, kill-switch state; bundle import
   by drag-and-drop or file picker, with the list of import errors. After an import that left
   OpenVPN profiles without credentials, a prompt asks for them; the profile list marks any

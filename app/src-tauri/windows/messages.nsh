@@ -21,6 +21,13 @@
 !define TH_REMOVING_UK "Видалення служби TunnelHop та її даних..."
 !define TH_REMOVE_FAILED_UK "Не вдалося повністю видалити службу TunnelHop (код $0).$\n$\nЯкщо після цього інтернет буде заблоковано, виконайте в командному рядку від імені адміністратора, перш ніж видаляти файл:"
 
+!define TH_STOPPING_MAYBE_RU "Остановка службы TunnelHop, если она запущена..."
+!define TH_INSTALLING_RU "Установка службы TunnelHop..."
+!define TH_INSTALL_FAILED_RU "Не удалось установить службу TunnelHop (код $0).$\n$\nПриложение будет сообщать, что служба не запущена. Запустите этот установщик ещё раз или выполните в командной строке от имени администратора:"
+!define TH_STOPPING_RU "Остановка службы TunnelHop..."
+!define TH_REMOVING_RU "Удаление службы TunnelHop и её данных..."
+!define TH_REMOVE_FAILED_RU "Не удалось полностью удалить службу TunnelHop (код $0).$\n$\nЕсли после этого интернет будет заблокирован, выполните в командной строке от имени администратора, прежде чем удалять файл:"
+
 !define TH_STOPPING_MAYBE_ES "Deteniendo el servicio de TunnelHop, si está en ejecución..."
 !define TH_INSTALLING_ES "Instalando el servicio de TunnelHop..."
 !define TH_INSTALL_FAILED_ES "No se pudo instalar el servicio de TunnelHop (código $0).$\n$\nLa aplicación indicará que el servicio no está en ejecución. Ejecute de nuevo este instalador o, desde un símbolo del sistema de administrador:"
@@ -82,6 +89,9 @@
   ${Switch} $LANGUAGE
     ${Case} 1058
       StrCpy $R9 "${TH_${KEY}_UK}"
+      ${Break}
+    ${Case} 1049
+      StrCpy $R9 "${TH_${KEY}_RU}"
       ${Break}
     ${Case} 1034
       StrCpy $R9 "${TH_${KEY}_ES}"
