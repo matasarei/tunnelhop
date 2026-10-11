@@ -327,8 +327,8 @@ built from the tagged commit and nothing else.
    `th-test` if this commit wasn't the one tested in step 1. Then publish it.
 
 A failed run creates no release. Fix the cause, delete the tag
-(`git push origin :refs/tags/v0.2.0`, `git tag -d v0.2.0`), and tag again. A tag that already
-has a release, draft or not, fails at the last step: delete the draft first. The installer is
+(`git push origin :refs/tags/v0.2.0`, `git tag -d v0.2.0`), and tag again. If the run got as
+far as a draft, delete that draft too before tagging again, so only one is left. The installer is
 not code-signed, so Windows SmartScreen warns on first run; the user guide says how to get past
 that.
 
