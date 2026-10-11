@@ -868,10 +868,21 @@ Implementation rulings worth knowing (full text in the commit bodies):
     installer.
   - The pop-up seen at sign-in in the VM is OpenVPN GUI, which ships with OpenVPN and finds no
     configs of its own. It isn't TunnelHop's, and TunnelHop leaves it alone.
+- **Licence (2026-10-11, before going public):** MIT OR Apache-2.0, at the user's option, with
+  the Apache-2.0 contribution clause in the README. The repository's history stays as it is.
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
    Defender). Until there is one, builds are unsigned.
+2. **Third-party notices in the installer.** It carries every crate compiled into
+   `th-service.exe` and `th-app.exe`, and nearly all of their licences (MIT, Apache-2.0, BSD,
+   ISC and the rest) require their copyright and permission notices to ship with the binaries.
+   None do yet. A notices file generated from `Cargo.lock` (`cargo about`) and installed beside
+   the exes covers them all, and is needed before a public release.
+   Separately, the owner's call: whether the dependencies under other licences, all through
+   Tauri and `dirs`, ship as they are. They are MPL-2.0 (`cssparser`, `cssparser-macros`,
+   `selectors`, `dtoa-short`, `option-ext`), Unicode-3.0 (the `icu_*` and `zerovec` family)
+   and CDLA-Permissive-2.0 (one).
 
 ## Progress
 - **2026-10-06:** steps 1–9 merged (PR #1). The Proton allowlist merged (PR #2). Steps 24–25
