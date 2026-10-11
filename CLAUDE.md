@@ -20,7 +20,7 @@ unelevated Tauri UI, and an app-owned WFP kill-switch.
 - Before every push, the same plus the app's type check runs in `.githooks/pre-push` (about a
   minute). Enable it once per clone: `git config core.hooksPath .githooks`. CI runs only the
   platform-independent th-core job (on a Linux runner) and, when service code changes, the
-  Windows release gate.
+  Windows release gate. A `v*` tag builds the installer into a draft release (`release.yml`).
 - Core only: `cargo test -p th-core`
 - Live tests (`--ignored`) run only inside the `th-test` VM, through PowerShell Direct (DEVELOPMENT.md §5).
 
