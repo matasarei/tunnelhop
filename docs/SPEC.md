@@ -305,6 +305,11 @@ survive a service crash.
 
 Triggered by the interval timer, by "Rotate Now", or by the current tunnel being down (or
 reconnecting longer than `reconnect_grace_seconds`) when `on_disconnect` is not `stay_down`.
+The timer and "Rotate Now" need a second usable profile (as in step 1): with one, the timer
+does not fire and "Rotate Now" is refused, since a rotation would only drop the tunnel and
+connect the same server again. The status reports this (`rotatable`); the tray and the
+window grey the rotation controls out and keep showing the stored settings, which apply again
+once there is a second profile.
 
 1. **Candidates:** profiles whose protocol is in `protocols`, whose runtime is available and
    which have credentials if they need them, minus the current profile. If none are left,

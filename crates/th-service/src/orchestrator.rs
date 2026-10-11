@@ -346,8 +346,12 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
                 self.finish(&inner, result)
             }
             Request::RotateNow => {
-                if inner.active.is_none() {
+                let Some(active) = inner.active.as_ref() else {
                     return error("import and select a bundle first");
+                };
+                // One server only: a rotation would drop the tunnel and connect it again.
+                if !active.rotator.can_rotate() {
+                    return error("there is no other server to rotate to");
                 }
                 self.rotate(&mut inner, Trigger::Manual, now).await
             }
@@ -908,6 +912,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
                     )),
                     auto_rotate: active.rotator.auto_rotate(),
                     interval_minutes: (active.rotator.interval().as_secs() / 60) as u32,
+                    rotatable: active.rotator.can_rotate(),
                     runtimes: lock(&self.runtimes).clone(),
                 }
             }
@@ -996,6 +1001,7 @@ fn empty_report(runtimes: Vec<RuntimeInfo>) -> StatusReport {
         bundle: None,
         auto_rotate: true,
         interval_minutes: DEFAULT_INTERVAL_MINUTES,
+        rotatable: false,
         runtimes,
     }
 }

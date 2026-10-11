@@ -628,6 +628,23 @@ step (or per closely related pair), opened as a PR against `main`.
     - Not checked: the installer's own pages in Russian on screen, the tray. Written without
       a native speaker's review.
 
+36. [x] Rotation is inactive with one usable server. On the PC, a bundle of one server was
+    dropped and reconnected to the same server every interval, with traffic blocked
+    meanwhile.
+    - Landed: `Rotator::can_rotate` (more than one usable profile), required by `due()`;
+      `RotateNow` refused without it; `StatusReport.rotatable`, so `PROTOCOL_VERSION` 4; the
+      tray and the window grey Rotate Now, auto-rotation and the interval out, keep the stored
+      settings, and say why; blocked with one server, the window's button is Connect.
+    - Ruling: the refusal is in `RotateNow`, not the engine: Connect without a profile, a lost
+      tunnel and the edit path go through `rotate()` and must keep working with one server.
+    - Checked in `th-test` (2026-10-11) with the interval at 1 minute: one server, connected
+      at 13:26:23, still the same tunnel at 13:29 and `ctl rotate` refused; the window greyed
+      with its explanation. A second server added: controls enabled, and the timer rotated
+      to it.
+    - Note: adding a second server after the interval has passed rotates within the next
+      tick, since the interval counts from the connect.
+    - Not checked: the tray on screen.
+
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
   (on the PC, and on CI for every PR)
