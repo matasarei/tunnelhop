@@ -2,6 +2,7 @@
 //! It holds no state of its own beyond the last status report: every change goes to the
 //! service as a request, and what the app shows comes back as the service's next report.
 
+pub mod actions;
 pub mod bundles;
 pub mod import;
 pub mod lang;
@@ -15,7 +16,6 @@ pub use app::{run, show_dashboard};
 #[cfg(windows)]
 mod app {
     use std::sync::Mutex;
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
 
     use tauri::{AppHandle, Emitter, Manager, WindowEvent};
@@ -24,6 +24,7 @@ mod app {
     use tauri_plugin_notification::NotificationExt;
     use th_core::ipc::{Event, ProfileFile, Request, Response, Secret, StatusReport};
 
+    use crate::actions::{Freshness, WindowAction, tray_request, window_request};
     use crate::bundles::BundleList;
     use crate::import::{ImportOutcome, exported, outcome, read_bundle, write_export};
     use crate::lang::text;
@@ -44,9 +45,9 @@ mod app {
         client: ServiceClient,
         report: Mutex<Option<StatusReport>>,
         tray: Mutex<Option<Tray>>,
-        /// Status events received so far: a `GetStatus` reply that arrives after one is older
-        /// than what is shown, and is dropped.
-        status_events: AtomicU64,
+        /// A `GetStatus` reply that arrives after a status event is older than what is shown,
+        /// and is dropped.
+        freshness: Freshness,
     }
 
     /// The dashboard window, shown and brought to the front.
@@ -103,11 +104,11 @@ mod app {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
                     let state = app.state::<AppState>();
-                    let seen = state.status_events.load(Ordering::SeqCst);
+                    let asked = state.freshness.asking();
                     let client = state.client.clone();
                     if let Ok(Response::Status { report }) =
                         client.request(Request::GetStatus).await
-                        && state.status_events.load(Ordering::SeqCst) == seen
+                        && state.freshness.is_current(asked)
                     {
                         apply(&app, Some(report));
                     }
@@ -118,9 +119,7 @@ mod app {
                 apply(app, None);
             }
             Update::Event(Event::Status { report }) => {
-                app.state::<AppState>()
-                    .status_events
-                    .fetch_add(1, Ordering::SeqCst);
+                app.state::<AppState>().freshness.pushed();
                 apply(app, Some(report));
             }
             Update::Event(Event::Alert { message }) => {
@@ -171,25 +170,22 @@ mod app {
     /// Send what a tray click asks for. The tray changes only with the service's next report;
     /// a refusal is shown as a notification.
     fn on_action(app: &AppHandle, action: Action) {
-        let request = match action {
+        match action {
             Action::Dashboard => return show_dashboard(app),
             Action::Exit => {
                 tauri::async_runtime::spawn(exit(app.clone()));
                 return;
             }
-            Action::Rotate => Request::RotateNow,
-            Action::Disconnect => Request::Disconnect,
-            Action::Interval(minutes) => Request::SetInterval { minutes },
-            Action::ToggleAuto => {
-                let state = app.state::<AppState>();
-                let on = state
-                    .report
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .as_ref()
-                    .is_some_and(|r| r.auto_rotate);
-                Request::SetAutoRotate { enabled: !on }
-            }
+            _ => {}
+        }
+        let report = app
+            .state::<AppState>()
+            .report
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let Some(request) = tray_request(action, report.as_ref()) else {
+            return;
         };
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
@@ -199,41 +195,16 @@ mod app {
         });
     }
 
-    /// What the window's controls ask for: the tray's actions, plus Connect.
-    #[derive(Debug, serde::Deserialize)]
-    #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
-    enum WindowAction {
-        /// A random server, or the one picked in the list.
-        Connect {
-            #[serde(default)]
-            profile_id: Option<String>,
-        },
-        Rotate,
-        Disconnect,
-        SetAutoRotate {
-            enabled: bool,
-        },
-        SetInterval {
-            minutes: u32,
-        },
-        Exit,
-    }
-
     /// The window's controls. A refusal comes back to the page, which shows it in place.
     #[tauri::command]
     async fn act(app: AppHandle, action: WindowAction) -> Result<(), String> {
-        let request = match action {
-            WindowAction::Connect { profile_id } => Request::Connect { profile_id },
-            WindowAction::Rotate => Request::RotateNow,
-            WindowAction::Disconnect => Request::Disconnect,
-            WindowAction::SetAutoRotate { enabled } => Request::SetAutoRotate { enabled },
-            WindowAction::SetInterval { minutes } => Request::SetInterval { minutes },
-            WindowAction::Exit => {
+        match window_request(action) {
+            Some(request) => send(&app, request).await,
+            None => {
                 exit(app).await;
-                return Ok(());
+                Ok(())
             }
-        };
-        send(&app, request).await
+        }
     }
 
     /// Import a bundle: the file dropped on the window, or one chosen in the native picker when
@@ -468,10 +439,7 @@ mod app {
     /// The intervals the tray offers, with their labels, so the window offers the same.
     #[tauri::command]
     fn intervals() -> Vec<(u32, String)> {
-        crate::tray::INTERVALS
-            .iter()
-            .map(|&m| (m, crate::tray::interval_label(m)))
-            .collect()
+        crate::actions::intervals()
     }
 
     /// Switch autostart on the first time the app runs, and never again.
@@ -546,7 +514,7 @@ mod app {
                 app.manage(AppState {
                     client,
                     report: Mutex::new(None),
-                    status_events: AtomicU64::new(0),
+                    freshness: Freshness::default(),
                     tray: Mutex::new(None),
                 });
                 let tray = Tray::build(app.handle(), on_action)?;
