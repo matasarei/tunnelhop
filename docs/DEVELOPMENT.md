@@ -312,9 +312,11 @@ Releases are built by CI (`.github/workflows/release.yml`), not on the PC, so wh
 built from the tagged commit and nothing else.
 
 1. Pass the installer pass in TESTING.md §3 with the commit you mean to release.
-2. Set the new version in all three places: `Cargo.toml` (`[workspace.package]`),
-   `app/src-tauri/tauri.conf.json` and `app/package.json`. Run `cargo build` once so that
-   `Cargo.lock` follows. Merge that change through a pull request like any other.
+2. Set the new version in all three places: `Cargo.toml` (`[workspace.package]`) and
+   `app/src-tauri/tauri.conf.json` by hand, and `app/package.json` with
+   `npm version <version> --no-git-tag-version` in `app/`, so that `package-lock.json` follows.
+   Run `cargo build` once so that `Cargo.lock` follows too. Merge that change through a pull
+   request like any other.
 3. Tag the merge commit on `main` and push the tag:
    ```powershell
    git switch main; git pull
