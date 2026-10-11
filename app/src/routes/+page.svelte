@@ -14,7 +14,7 @@
   import RuntimeHelp from "$lib/RuntimeHelp.svelte";
   import Servers from "$lib/Servers.svelte";
   import Unlock from "$lib/Unlock.svelte";
-  import { followSystemTheme } from "$lib/fluent";
+  import { disabledAttribute, followSystemTheme } from "$lib/fluent";
   import { sentences, t, tn } from "$lib/i18n";
   import * as ipc from "$lib/ipc";
   import type { Action, Bundle, BundleList, Profile, Protocol, Report } from "$lib/ipc";
@@ -512,7 +512,7 @@
       </div>
       <fluent-switch
         checked={report?.auto_rotate ?? false}
-        disabled={!reachable || busy || !rotatable}
+        use:disabledAttribute={!reachable || busy || !rotatable}
         aria-label={t("rotation.auto")}
         onchange={(e: Event) => act({ type: "set_auto_rotate", enabled: (e.currentTarget as HTMLInputElement).checked })}
       ></fluent-switch>
