@@ -71,6 +71,10 @@ replaces the service and drivers, not the logic.
 | `%ProgramData%\TunnelHop\logs\` | Service logs | SYSTEM, Administrators |
 | `%LocalAppData%\TunnelHop\` | UI-only preferences (window, theme) | user |
 
+These access rules keep the files from being read directly. The pipe, though, accepts every
+interactive user (§2.2), and an export (§3.6) hands out a bundle's configs and, when asked, its
+sign-ins: any user signed in to the PC can export them, administrator or not.
+
 ---
 
 ## 3. Configuration bundle
@@ -264,6 +268,10 @@ another PC.
 - The service answers with the bytes and a file name (the bundle name, made a valid Windows
   file name); it never writes the file, and nothing changes: not the bundle, its secrets, nor
   the tunnel. The log records the export, never its content.
+- **Who can export:** any interactive user, as for every other request, administrator or not.
+  The keys and sign-ins are only as private as the accounts on the PC: on a shared PC, another
+  account can export them. Decided with the developer; the UI runs unelevated, so an
+  administrators-only export would not be reachable from the window.
 
 ---
 
