@@ -313,9 +313,15 @@ mod app {
         let Some(path) = chosen.and_then(|file| file.into_path().ok()) else {
             return Ok(false);
         };
+        let name = path.display().to_string();
         tauri::async_runtime::spawn_blocking(move || write_export(&path, &zip))
             .await
-            .map_err(|e| text("file.read_failed", &[("reason", &e.to_string())]))??;
+            .map_err(|e| {
+                text(
+                    "file.cannot_write",
+                    &[("name", &name), ("reason", &e.to_string())],
+                )
+            })??;
         Ok(true)
     }
 
