@@ -19,6 +19,8 @@
   let repeat = $state("");
   let saving = $state(false);
   let error = $state<string | null>(null);
+  /** Closing removes the dialog, which reports itself closed once more: answered once only. */
+  let closed = false;
 
   const signsIn = $derived(bundle.profiles.some((p) => p.protocol === "openvpn"));
   let includeSignIns = $state(true);
@@ -41,6 +43,7 @@
       // Closing the save dialog leaves this one open, to change something or cancel.
       if (!saved) return;
       forget();
+      closed = true;
       onclose(true);
     } catch (e) {
       error = String(e);
@@ -62,6 +65,8 @@
 
   function cancel() {
     forget();
+    if (closed) return;
+    closed = true;
     onclose(false);
   }
 
