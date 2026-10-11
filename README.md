@@ -3,6 +3,7 @@
 [![CI](https://github.com/matasarei/tunnelhop/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/matasarei/tunnelhop/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/matasarei/tunnelhop?include_prereleases&sort=semver)](https://github.com/matasarei/tunnelhop/releases)
 [![Platform: Windows 10 | 11](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6)](docs/guide/en.md#1-what-you-need)
+[![Licence: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#licence)
 
 VPN server rotation for Windows. TunnelHop connects to your provider's WireGuard servers,
 switches between them on a schedule, and blocks all traffic while it switches, so nothing
@@ -64,4 +65,14 @@ runs.
 
 ## Licence
 
-A licence is being added (MIT OR Apache-2.0). Until it is, all rights are reserved.
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <https://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/licenses/MIT>)
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion
+in TunnelHop by you, as defined in the Apache-2.0 license, shall be dual licensed as above,
+without any additional terms or conditions.
