@@ -7,6 +7,7 @@
 use std::fmt;
 use std::net::IpAddr;
 
+use serde::{Deserialize, Serialize};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::bundle::ImportError;
@@ -30,9 +31,10 @@ pub struct Endpoint {
     pub transport: Transport,
 }
 
-/// OpenVPN username and password moved out of the bundle's `auth-user-pass` file. Both are
-/// wiped from memory on drop.
-#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
+/// OpenVPN username and password moved out of the bundle's `auth-user-pass` file or its
+/// manifest. Both are wiped from memory on drop.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
+#[serde(deny_unknown_fields)]
 pub struct Credentials {
     pub username: String,
     pub password: String,
@@ -45,6 +47,22 @@ impl fmt::Debug for Credentials {
             .field("password", &"<redacted>")
             .finish()
     }
+}
+
+/// The most characters in a username or a password.
+pub const MAX_CREDENTIAL_CHARS: usize = 256;
+
+/// Why a username or a password cannot be used, if it cannot. Each ends up as one line in
+/// OpenVPN's management protocol: no line breaks or NUL, and a bounded length.
+pub fn credential_problem(value: &str) -> Option<String> {
+    let chars = value.chars().count();
+    if chars == 0 || chars > MAX_CREDENTIAL_CHARS {
+        return Some(format!("must be 1 to {MAX_CREDENTIAL_CHARS} characters"));
+    }
+    if value.contains(['\r', '\n', '\0']) {
+        return Some("must not contain line breaks or NUL".into());
+    }
+    None
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

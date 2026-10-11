@@ -1,13 +1,19 @@
 mod common;
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
+use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
 
 use common::{Entry, OVPN_CONF, WG_CONF, valid_bundle, zip};
-use th_core::bundle::{self, BundleId};
+use serde_json::{Value, json};
+use th_core::bundle::{self, BundleId, Unlock};
 use th_core::edit::{self, Edit, MAX_CONFIG_BYTES, NewProfile, profile_id_from, protocol_of};
-use th_core::manifest::{MAX_PROFILES, Protocol};
+use th_core::manifest::{MAX_PROFILES, Protocol, SignIns};
+use th_core::sanitize::Credentials;
+use zip::unstable::write::FileOptionsExt;
+use zip::write::SimpleFileOptions;
+use zip::{AesMode, ZipArchive, ZipWriter};
 
 /// The test bundle (`wg-1`, `ovpn-1`) installed in a fresh store.
 fn installed() -> (tempfile::TempDir, PathBuf, BundleId) {
@@ -488,4 +494,270 @@ fn only_a_zip_of_bare_configs_is_converted() {
     ]);
     let errors = errors_of(edit::from_config_zip(&link).unwrap());
     assert!(errors[0].contains("symbolic links"), "{errors:?}");
+}
+
+// Export
+
+fn sign_in(username: &str, password: &str) -> Credentials {
+    Credentials {
+        username: username.to_string(),
+        password: password.to_string(),
+    }
+}
+
+/// The entries of a zip, by name: read with `password` where they are encrypted.
+fn entries_of(zip_bytes: &[u8], password: Option<&str>) -> BTreeMap<String, Vec<u8>> {
+    let mut archive = ZipArchive::new(Cursor::new(zip_bytes)).unwrap();
+    let mut entries = BTreeMap::new();
+    for i in 0..archive.len() {
+        let mut entry = match password {
+            Some(password) => archive.by_index_decrypt(i, password.as_bytes()).unwrap(),
+            None => archive.by_index(i).unwrap(),
+        };
+        let mut content = Vec::new();
+        entry.read_to_end(&mut content).unwrap();
+        entries.insert(entry.name().to_string(), content);
+    }
+    entries
+}
+
+/// A bundle of one OpenVPN server whose config asks for a sign-in, and one WireGuard server.
+fn asking_bundle(manifest_extra: Value, auth_txt: bool) -> Vec<u8> {
+    let mut manifest: Value = serde_json::from_str(common::MANIFEST).unwrap();
+    if let Value::Object(extra) = manifest_extra {
+        manifest.as_object_mut().unwrap().extend(extra);
+    }
+    let directive = if auth_txt {
+        "auth-user-pass auth.txt\n"
+    } else {
+        "auth-user-pass\n"
+    };
+    let mut entries = vec![
+        Entry::File("manifest.json", serde_json::to_vec(&manifest).unwrap()),
+        Entry::File("wireguard/one.conf", WG_CONF.as_bytes().to_vec()),
+        Entry::File(
+            "openvpn/one.ovpn",
+            format!("{OVPN_CONF}{directive}").into_bytes(),
+        ),
+    ];
+    if auth_txt {
+        entries.push(Entry::File(
+            "openvpn/auth.txt",
+            b"file-user\nfile-pass\n".to_vec(),
+        ));
+    }
+    zip(&entries)
+}
+
+#[test]
+fn an_exported_bundle_imports_again_with_the_same_servers_and_configs() {
+    let (_tmp, root, id) = installed();
+    let exported = edit::export(&root, &id, None, None).unwrap();
+
+    let (_other, elsewhere) = store();
+    let again = bundle::import(&exported, &elsewhere).unwrap();
+    let original = bundle::open(&root, &id).unwrap();
+    assert_eq!(again.manifest, original.manifest);
+    for profile in &original.manifest.profiles {
+        assert_eq!(
+            fs::read(again.dir.join(&profile.file)).unwrap(),
+            fs::read(original.dir.join(&profile.file)).unwrap(),
+            "{}",
+            profile.file
+        );
+    }
+}
+
+#[test]
+fn a_bundle_made_here_exports_to_the_bytes_it_was_installed_from() {
+    let (_tmp, root) = store();
+    let made = edit::create("Mine", &[new("", "a.conf", WG_CONF)]).unwrap();
+    let id = bundle::import(&made, &root).unwrap().id;
+
+    let exported = edit::export(&root, &id, None, None).unwrap();
+    assert_eq!(exported, made);
+    assert!(bundle::import(&exported, &root).unwrap().already_present);
+}
+
+#[test]
+fn sign_ins_travel_in_the_manifest_and_never_stay_in_the_installed_one() {
+    let (_tmp, root) = store();
+    let id = bundle::import(&asking_bundle(json!({}), false), &root)
+        .unwrap()
+        .id;
+    let sign_ins = SignIns {
+        default: Some(sign_in("everyone", "pw-default")),
+        profiles: [("ovpn-1".to_string(), sign_in("just-one", "pw-own"))].into(),
+    };
+
+    let exported = edit::export(&root, &id, Some(sign_ins), None).unwrap();
+    let manifest = String::from_utf8(entries_of(&exported, None)["manifest.json"].clone()).unwrap();
+    assert!(
+        manifest.contains("pw-default") && manifest.contains("pw-own"),
+        "{manifest}"
+    );
+
+    let (_other, elsewhere) = store();
+    let imported = bundle::import(&exported, &elsewhere).unwrap();
+    assert_eq!(
+        imported.default_credentials,
+        Some(sign_in("everyone", "pw-default"))
+    );
+    assert_eq!(
+        imported.credentials.get("ovpn-1"),
+        Some(&sign_in("just-one", "pw-own"))
+    );
+    assert!(imported.needs_credentials.is_empty());
+    assert_eq!(imported.manifest.credentials, None);
+
+    let stored = fs::read_to_string(imported.dir.join("manifest.json")).unwrap();
+    assert!(
+        !stored.contains("credentials") && !stored.contains("pw-"),
+        "{stored}"
+    );
+    // What was stored is still a manifest the service reads back.
+    assert_eq!(
+        bundle::open(&elsewhere, &imported.id).unwrap().manifest,
+        imported.manifest
+    );
+}
+
+#[test]
+fn a_default_sign_in_alone_answers_every_server() {
+    let sign_ins = json!({ "credentials": { "default": { "username": "u", "password": "p" } } });
+    let (_tmp, root) = store();
+    let imported = bundle::import(&asking_bundle(sign_ins, false), &root).unwrap();
+    assert_eq!(imported.default_credentials, Some(sign_in("u", "p")));
+    assert!(imported.credentials.is_empty());
+    assert!(imported.needs_credentials.is_empty());
+}
+
+#[test]
+fn a_server_signed_in_by_its_auth_file_and_the_manifest_is_refused() {
+    let both = json!({ "credentials": { "profiles": { "ovpn-1": { "username": "u", "password": "p" } } } });
+    let (_tmp, root) = store();
+    let errors: Vec<String> = bundle::import(&asking_bundle(both, true), &root)
+        .unwrap_err()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("credentials.profiles.ovpn-1")),
+        "{errors:?}"
+    );
+    assert!(!root.exists() || fs::read_dir(&root).unwrap().next().is_none());
+
+    // The auth file alone still works as before.
+    let imported = bundle::import(&asking_bundle(json!({}), true), &root).unwrap();
+    assert_eq!(
+        imported.credentials.get("ovpn-1"),
+        Some(&sign_in("file-user", "file-pass"))
+    );
+}
+
+#[test]
+fn a_password_encrypts_every_entry_with_aes_and_the_import_asks_for_it() {
+    let (_tmp, root, id) = installed();
+    let exported = edit::export(&root, &id, None, Some("correct horse")).unwrap();
+
+    let mut archive = ZipArchive::new(Cursor::new(&exported)).unwrap();
+    for i in 0..archive.len() {
+        assert!(archive.by_index_raw(i).unwrap().encrypted());
+        let aes = archive
+            .get_aes_verification_key_and_salt(i)
+            .unwrap()
+            .unwrap();
+        assert_eq!(aes.aes_mode, AesMode::Aes256);
+    }
+
+    assert_eq!(bundle::unlock(&exported, None), Unlock::NeedsPassword);
+    assert_eq!(
+        bundle::unlock(&exported, Some("wrong")),
+        Unlock::WrongPassword
+    );
+    assert_eq!(
+        bundle::unlock(&exported, Some("correct horse")),
+        Unlock::Readable
+    );
+    assert_eq!(
+        bundle::unlock(&valid_bundle(vec![]), None),
+        Unlock::Readable
+    );
+
+    let (_other, elsewhere) = store();
+    let errors = bundle::import(&exported, &elsewhere).unwrap_err();
+    assert!(
+        errors[0].to_string().contains("a password is needed"),
+        "{errors:?}"
+    );
+    assert!(bundle::import_with(&exported, &elsewhere, Some("wrong")).is_err());
+    let imported = bundle::import_with(&exported, &elsewhere, Some("correct horse")).unwrap();
+    assert_eq!(
+        imported.manifest,
+        bundle::open(&root, &id).unwrap().manifest
+    );
+}
+
+#[test]
+fn entries_encrypted_with_zipcrypto_are_refused_whatever_the_password() {
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let weak = SimpleFileOptions::default()
+        .with_deprecated_encryption(b"pw")
+        .unwrap();
+    for (name, content) in [
+        ("manifest.json", common::MANIFEST),
+        ("wireguard/one.conf", WG_CONF),
+        ("openvpn/one.ovpn", OVPN_CONF),
+    ] {
+        writer.start_file(name, weak).unwrap();
+        writer.write_all(content.as_bytes()).unwrap();
+    }
+    let weak = writer.finish().unwrap().into_inner();
+
+    let (_tmp, root) = store();
+    let errors = bundle::import_with(&weak, &root, Some("pw")).unwrap_err();
+    assert_eq!(errors.len(), 3, "{errors:?}");
+    assert!(
+        errors.iter().all(|e| e.to_string().contains("ZipCrypto")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_protected_zip_of_bare_configs_becomes_a_bundle_with_its_password() {
+    let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+    let options = SimpleFileOptions::default().with_aes_encryption(AesMode::Aes256, "pw");
+    writer.start_file("a.conf", options).unwrap();
+    writer.write_all(WG_CONF.as_bytes()).unwrap();
+    let locked = writer.finish().unwrap().into_inner();
+
+    assert_eq!(bundle::unlock(&locked, None), Unlock::NeedsPassword);
+    let built = edit::from_config_zip_with(&locked, Some("pw"))
+        .unwrap()
+        .unwrap();
+    let (_tmp, root) = store();
+    assert_eq!(
+        bundle::import(&built, &root).unwrap().manifest.profiles[0].id,
+        "a"
+    );
+}
+
+#[test]
+fn exporting_a_bundle_that_is_not_installed_is_an_error() {
+    let (_tmp, root) = store();
+    let missing = BundleId::parse("0123456789abcdef").unwrap();
+    assert!(edit::export(&root, &missing, None, None).is_err());
+}
+
+#[test]
+fn an_exported_file_is_named_after_its_bundle() {
+    assert_eq!(edit::export_file_name("Proton UA"), "Proton UA.zip");
+    assert_eq!(edit::export_file_name("a/b:c*?"), "a_b_c__.zip");
+    assert_eq!(edit::export_file_name("  trailing. . "), "trailing.zip");
+    assert_eq!(edit::export_file_name("Мої сервери"), "Мої сервери.zip");
+    assert_eq!(edit::export_file_name(""), "bundle.zip");
+    assert_eq!(edit::export_file_name("..."), "bundle.zip");
+    assert_eq!(edit::export_file_name("CON"), "bundle.zip");
 }

@@ -194,8 +194,6 @@ impl fmt::Debug for Secret {
     }
 }
 
-const MAX_CREDENTIAL_CHARS: usize = 256;
-
 impl Request {
     /// Check the request's own values; the service still checks them against its state.
     pub fn validate(&self) -> Result<(), IpcError> {
@@ -287,18 +285,10 @@ fn check_profile_id(id: &str) -> Result<(), IpcError> {
 /// Credentials end up as one line each in OpenVPN's management protocol: no line breaks or
 /// NUL, and a bounded length.
 fn check_credential(what: &str, value: &str) -> Result<(), IpcError> {
-    let chars = value.chars().count();
-    if chars == 0 || chars > MAX_CREDENTIAL_CHARS {
-        return Err(IpcError::Invalid(format!(
-            "{what} must be 1 to {MAX_CREDENTIAL_CHARS} characters"
-        )));
+    match crate::sanitize::credential_problem(value) {
+        Some(problem) => Err(IpcError::Invalid(format!("{what} {problem}"))),
+        None => Ok(()),
     }
-    if value.contains(['\r', '\n', '\0']) {
-        return Err(IpcError::Invalid(format!(
-            "{what} must not contain line breaks or NUL"
-        )));
-    }
-    Ok(())
 }
 
 /// Decode an `ImportBundle` payload, enforcing the archive size limit.

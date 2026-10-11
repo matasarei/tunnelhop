@@ -495,6 +495,7 @@ mod tests {
             manifest: manifest(),
             endpoints: Default::default(),
             credentials: [("ov1".to_string(), credentials("from-auth-txt", "pw1"))].into(),
+            default_credentials: None,
             needs_credentials: vec!["ov2".to_string()],
             already_present: false,
         };

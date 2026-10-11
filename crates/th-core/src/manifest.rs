@@ -3,10 +3,12 @@
 //! Parsing rejects unknown fields; [`parse`] then runs the rules serde cannot express and
 //! reports all violations at once, so a bundle author fixes them in one pass.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
+
+use crate::sanitize::{Credentials, credential_problem};
 
 pub const SCHEMA_VERSION: &str = "1";
 pub const MAX_PROFILES: usize = 500;
@@ -55,6 +57,28 @@ pub struct Manifest {
     #[serde(default)]
     pub rotation: Rotation,
     pub profiles: Vec<Profile>,
+    /// OpenVPN sign-ins, written by an export that included them. An import moves them into
+    /// the service's sealed store and never keeps them in the installed manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credentials: Option<SignIns>,
+}
+
+/// A bundle's OpenVPN sign-ins: the default for every server, and those of single servers,
+/// which win over it. The same two layers the service stores.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SignIns {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<Credentials>,
+    /// By profile id.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub profiles: BTreeMap<String, Credentials>,
+}
+
+impl SignIns {
+    pub fn is_empty(&self) -> bool {
+        self.default.is_none() && self.profiles.is_empty()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -206,6 +230,10 @@ fn validate(m: &Manifest) -> Vec<ManifestError> {
         }
     }
 
+    if let Some(sign_ins) = &m.credentials {
+        check_sign_ins(m, sign_ins, &mut errors);
+    }
+
     if !m.profiles.is_empty() {
         let allowed = m.rotation_protocols();
         if !m.profiles.iter().any(|p| allowed.contains(&p.protocol)) {
@@ -217,6 +245,39 @@ fn validate(m: &Manifest) -> Vec<ManifestError> {
     }
 
     errors
+}
+
+fn check_sign_ins(m: &Manifest, sign_ins: &SignIns, errors: &mut Vec<ManifestError>) {
+    if sign_ins.is_empty() {
+        errors.push(ManifestError::new(
+            "credentials",
+            "must hold a default or a profile's sign-in",
+        ));
+    }
+    if let Some(default) = &sign_ins.default {
+        check_sign_in("credentials.default", default, errors);
+    }
+    for (id, credentials) in &sign_ins.profiles {
+        let field = format!("credentials.profiles.{id}");
+        match m.profiles.iter().find(|p| &p.id == id) {
+            None => errors.push(ManifestError::new(field, "no profile has this id")),
+            Some(p) if p.protocol != Protocol::Openvpn => {
+                errors.push(ManifestError::new(field, "only OpenVPN profiles sign in"))
+            }
+            Some(_) => check_sign_in(&field, credentials, errors),
+        }
+    }
+}
+
+fn check_sign_in(field: &str, credentials: &Credentials, errors: &mut Vec<ManifestError>) {
+    for (part, value) in [
+        ("username", &credentials.username),
+        ("password", &credentials.password),
+    ] {
+        if let Some(problem) = credential_problem(value) {
+            errors.push(ManifestError::new(format!("{field}.{part}"), problem));
+        }
+    }
 }
 
 fn check_name(field: &str, value: &str, errors: &mut Vec<ManifestError>) {

@@ -27,7 +27,7 @@ async-trait = "0.1.92"
 tempfile = "3.27.0"
 th-core = { path = "../th-core", features = ["testing"] }
 zeroize = "1.9.1"
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+zip = { version = "8.6.0", default-features = false, features = ["deflate", "aes-crypto"] }
 
 [features]
 # Dev builds only: lift a kill-switch engage nobody confirmed after 120 s. Release builds must

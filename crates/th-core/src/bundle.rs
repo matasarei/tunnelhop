@@ -4,6 +4,8 @@
 //! before anything touches the disk; only the manifest and the files its profiles reference
 //! are written, into a staging directory that is renamed into place once everything passed.
 
+use std::borrow::Cow;
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::fs;
@@ -13,7 +15,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-use crate::manifest::{self, Manifest};
+use crate::manifest::{self, Manifest, SignIns};
 use crate::sanitize::{self, Credentials, Endpoint};
 use crate::tunnel_name::is_dos_device_name;
 
@@ -113,6 +115,9 @@ pub struct ImportedBundle {
     /// OpenVPN credentials per profile id, taken out of the archive for the caller to store
     /// securely. Empty when `already_present`: they were handed over on the first import.
     pub credentials: BTreeMap<String, Credentials>,
+    /// The bundle-wide OpenVPN credentials from the manifest's sign-ins, for the caller to store
+    /// the same way. `None` when `already_present`.
+    pub default_credentials: Option<Credentials>,
     /// OpenVPN profiles whose runtime will ask for credentials that this import did not supply,
     /// in manifest order. The caller subtracts what it already has stored; on a repeated
     /// import that includes profiles whose credentials came from the first one.
@@ -125,6 +130,46 @@ pub struct ImportedBundle {
 ///
 /// On any error nothing is left under `root` and every problem found is returned.
 pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<ImportError>> {
+    import_with(zip_bytes, root, None)
+}
+
+/// Whether an archive's encrypted entries can be read with a password, asked before an import
+/// so that the user can be asked for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unlock {
+    /// Nothing is encrypted, or the password opens it. Anything else wrong with the archive is
+    /// for the import to report.
+    Readable,
+    NeedsPassword,
+    WrongPassword,
+}
+
+/// Try `password` on the archive's first encrypted entry.
+pub fn unlock(zip_bytes: &[u8], password: Option<&str>) -> Unlock {
+    let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(zip_bytes)) else {
+        return Unlock::Readable;
+    };
+    let encrypted = (0..archive.len().min(MAX_ENTRIES))
+        .find(|&i| archive.by_index_raw(i).is_ok_and(|entry| entry.encrypted()));
+    let (Some(index), Some(password)) = (encrypted, password) else {
+        return if encrypted.is_some() {
+            Unlock::NeedsPassword
+        } else {
+            Unlock::Readable
+        };
+    };
+    match archive.by_index_decrypt(index, password.as_bytes()) {
+        Err(zip::result::ZipError::InvalidPassword) => Unlock::WrongPassword,
+        _ => Unlock::Readable,
+    }
+}
+
+/// [`import`] of an archive whose entries may be encrypted with `password` (AES only).
+pub fn import_with(
+    zip_bytes: &[u8],
+    root: &Path,
+    password: Option<&str>,
+) -> Result<ImportedBundle, Vec<ImportError>> {
     if zip_bytes.len() > MAX_ZIP_BYTES {
         return Err(vec![ImportError::archive(format!(
             "archive is larger than {} MB",
@@ -138,19 +183,53 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
         return open(root, &id);
     }
 
-    let entries = read_entries(zip_bytes, check_entry_name)?;
+    let entries = read_entries(zip_bytes, check_entry_name, password)?;
     let manifest_bytes = entries
         .get(MANIFEST_FILE)
         .ok_or_else(|| vec![ImportError::archive("manifest.json is missing")])?;
-    let manifest = manifest::parse(manifest_bytes).map_err(|errors| {
+    let mut manifest = manifest::parse(manifest_bytes).map_err(|errors| {
         errors
             .iter()
             .map(|e| ImportError::in_file(MANIFEST_FILE, e.to_string()))
             .collect::<Vec<_>>()
     })?;
-    let prepared = prepare_profiles(&manifest, &|path| entries.get(path).cloned())?;
+    let mut prepared = prepare_profiles(&manifest, &|path| entries.get(path).cloned())?;
 
-    install(root, &dir, manifest_bytes, &prepared.files).map_err(|e| {
+    // Sign-ins go to the caller, like an auth.txt's, and never into the installed manifest.
+    let (stored_manifest, SignIns { default, profiles }) = match manifest.credentials.take() {
+        None => (Cow::Borrowed(manifest_bytes.as_slice()), SignIns::default()),
+        Some(sign_ins) => (
+            Cow::Owned(serde_json::to_vec_pretty(&manifest).expect("a manifest always serializes")),
+            sign_ins,
+        ),
+    };
+    let mut errors = Vec::new();
+    for (id, credentials) in profiles {
+        match prepared.credentials.entry(id) {
+            Entry::Occupied(taken) => errors.push(ImportError::in_file(
+                MANIFEST_FILE,
+                format!(
+                    "credentials.profiles.{}: its auth-user-pass file already signs it in",
+                    taken.key()
+                ),
+            )),
+            Entry::Vacant(free) => {
+                free.insert(credentials);
+            }
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    if default.is_some() {
+        prepared.needs_credentials.clear();
+    } else {
+        prepared
+            .needs_credentials
+            .retain(|id| !prepared.credentials.contains_key(id));
+    }
+
+    install(root, &dir, &stored_manifest, &prepared.files).map_err(|e| {
         vec![ImportError::archive(format!(
             "could not write the bundle: {e}"
         ))]
@@ -162,6 +241,7 @@ pub fn import(zip_bytes: &[u8], root: &Path) -> Result<ImportedBundle, Vec<Impor
         manifest,
         endpoints: prepared.endpoints,
         credentials: prepared.credentials,
+        default_credentials: default,
         needs_credentials: prepared.needs_credentials,
         already_present: false,
     })
@@ -180,6 +260,7 @@ pub fn open(root: &Path, id: &BundleId) -> Result<ImportedBundle, Vec<ImportErro
         manifest,
         endpoints: prepared.endpoints,
         credentials: BTreeMap::new(),
+        default_credentials: None,
         needs_credentials: prepared.needs_credentials,
         already_present: true,
     })
@@ -229,10 +310,12 @@ pub(crate) fn read_installed_manifest(dir: &Path) -> Result<Manifest, Vec<Import
 }
 
 /// Read every regular file of the archive into memory, enforcing the entry rules and limits.
-/// `check_name` says which entry names the archive may hold.
+/// `check_name` says which entry names the archive may hold. Encrypted entries are read with
+/// `password`, and only when they use AES: the older ZipCrypto is broken and refused.
 pub(crate) fn read_entries(
     zip_bytes: &[u8],
     check_name: fn(&str) -> Result<(), &'static str>,
+    password: Option<&str>,
 ) -> Result<BTreeMap<String, Vec<u8>>, Vec<ImportError>> {
     let mut archive = zip::ZipArchive::new(Cursor::new(zip_bytes)).map_err(|e| {
         vec![ImportError::archive(format!(
@@ -251,7 +334,26 @@ pub(crate) fn read_entries(
     let mut total: u64 = 0;
 
     for index in 0..archive.len() {
-        let mut entry = match archive.by_index(index) {
+        let encrypted = match archive.by_index_raw(index) {
+            Ok(entry) => entry.encrypted(),
+            Err(e) => {
+                errors.push(ImportError::archive(format!("entry #{index}: {e}")));
+                continue;
+            }
+        };
+        let is_aes = encrypted
+            && archive
+                .get_aes_verification_key_and_salt(index)
+                .is_ok_and(|aes| aes.is_some());
+        let opened = match (encrypted, password) {
+            (false, _) => archive.by_index(index),
+            (true, Some(password)) if is_aes => {
+                archive.by_index_decrypt(index, password.as_bytes())
+            }
+            // Refused below, by name, once the name is known.
+            (true, _) => archive.by_index_raw(index),
+        };
+        let mut entry = match opened {
             Ok(entry) => entry,
             Err(e) => {
                 errors.push(ImportError::archive(format!("entry #{index}: {e}")));
@@ -278,10 +380,17 @@ pub(crate) fn read_entries(
             ));
             continue;
         }
-        if entry.encrypted() {
+        if encrypted && !is_aes {
             errors.push(ImportError::in_file(
                 &name,
-                "encrypted entries are not allowed",
+                "is encrypted with ZipCrypto, which is not safe: only AES encryption is accepted",
+            ));
+            continue;
+        }
+        if encrypted && password.is_none() {
+            errors.push(ImportError::in_file(
+                &name,
+                "is encrypted: a password is needed",
             ));
             continue;
         }
