@@ -1,7 +1,8 @@
 // The window is a page in WebView2, which brings a browser's own context menu (back, refresh,
 // save as, print; in a text field also "import passwords" and the browser's tools) and its
 // shortcuts. None of them belong in an app: they are turned off. Cut, copy and paste in a text
-// field still work from the keyboard.
+// field still work from the keyboard. Zoom (Ctrl with +, - or the wheel) is left alone on
+// purpose: it helps someone who needs the text larger.
 
 /**
  * Ctrl+key shortcuts of the browser: print, save, find, find next, reload, view source. By the
