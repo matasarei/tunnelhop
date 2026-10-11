@@ -1,0 +1,83 @@
+name: Release
+
+# A tag `v<version>` builds the installer (app + service) and attaches it to a draft GitHub
+# Release. Nothing is published from here: a person reads the draft and publishes it. The
+# version in the tag must be the one the three manifests carry, so a release never ships a
+# binary that says another version. How to cut one: docs/DEVELOPMENT.md, "Cutting a release".
+
+on:
+  push:
+    tags: ["v*"]
+
+# Read only, except the one job that creates the release.
+permissions:
+  contents: read
+
+# Two pushes of the same tag never build side by side; a release is never cancelled halfway.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  installer:
+    name: installer (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        # Nothing here pushes; the release is created with GH_TOKEN below.
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        # The version the app is developed with; Vite 8 and Vitest 5 refuse older ones.
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: The tag matches the manifests' version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          cargo=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          tauri=$(node -p 'require("./app/src-tauri/tauri.conf.json").version')
+          npm=$(node -p 'require("./app/package.json").version')
+          echo "tag $tag, Cargo.toml $cargo, tauri.conf.json $tauri, package.json $npm"
+          if [ "$tag" != "$cargo" ] || [ "$tag" != "$tauri" ] || [ "$tag" != "$npm" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match the version in every manifest"; exit 1
+          fi
+
+      - name: Build the installer
+        working-directory: app
+        run: |
+          npm ci
+          npm run installer
+
+      # The release gate proves this on every service change; checked again on the very binary
+      # that ships.
+      - name: The service carries no dev safety timer
+        run: |
+          if grep -q -a TUNNELHOP_DEV_SAFETY_TIMER target/release/th-service.exe; then
+            echo "::error::the release build contains the dev safety timer"; exit 1
+          fi
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: target/release/bundle/nsis
+        run: |
+          installer="TunnelHop_${GITHUB_REF_NAME#v}_x64-setup.exe"
+          test -f "$installer" || { ls -la; echo "::error::$installer was not built"; exit 1; }
+          sha256sum "$installer" > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" "$installer" SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes \
+            --title "TunnelHop $GITHUB_REF_NAME"
