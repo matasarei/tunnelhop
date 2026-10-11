@@ -2,7 +2,8 @@ name: CI
 
 # Only what a developer's machine cannot vouch for runs here; the full check (fmt, clippy, every
 # test, the app's type check) runs locally before each push, in .githooks/pre-push. This job
-# proves th-core still builds and passes off Windows, where nobody develops. The release-safety
+# proves th-core still builds and passes off Windows (on a Linux runner, the cheapest), so the core
+# stays free of platform code. TunnelHop itself is Windows-only. The release-safety
 # gate is release-gate.yml.
 
 on:
@@ -23,8 +24,8 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  core-linux:
-    name: th-core (Linux)
+  core-portable:
+    name: th-core (platform-independent)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
