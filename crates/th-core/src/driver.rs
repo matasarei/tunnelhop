@@ -80,6 +80,10 @@ pub enum DriverError {
         found: String,
         required: String,
     },
+    /// The server took the connection and then refused the username and password. Another
+    /// try with the same ones cannot end differently.
+    #[error("the server refused the username and password")]
+    CredentialsRefused,
     #[error("timed out: {0}")]
     Timeout(String),
     #[error("{0}")]
