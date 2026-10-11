@@ -68,6 +68,11 @@ Then check, after each of **install**, **install again over it** (an upgrade) an
 | Upgrade (installer run again while connected) | exit code 0; the service is Running; bundles, the active bundle and `settings.json` are kept; the tunnel is down and the block lifted until you connect again |
 | Uninstall (`uninstall.exe /S`, or Settings → Apps) | `sc query TunnelHop` says the service is not installed; `C:\Program Files\TunnelHop` and `C:\ProgramData\TunnelHop` are gone; no `WireGuardTunnel$th-*` service and no `openvpn.exe`; `netsh wfp show filters` lists nothing named TunnelHop; the Start-menu and desktop shortcuts and the autostart entry are gone; the internet works |
 
+The installer takes its language from Windows, in the app's ten languages. To see another, the
+VM needs that display language: `Install-Language uk-UA` (about half an hour),
+`Set-WinUILanguageOverride -Language uk-UA`, then sign out and in. `Alt+Tab` brings the
+installer to the front for the keyboard.
+
 The WFP check, in the VM: `netsh wfp show filters file=f.xml; Select-String f.xml -Pattern TunnelHop -SimpleMatch`.
 
 **Last run: 2026-10-10, in `th-test`, installer built from `feature/installer`.** All rows as

@@ -6,6 +6,25 @@
     "active": true,
     "resources": {
       "../../target/release/th-service.exe": "th-service.exe"
+    },
+    "windows": {
+      "nsis": {
+        "languages": [
+          "English",
+          "Ukrainian",
+          "Spanish",
+          "French",
+          "German",
+          "PortugueseBR",
+          "Italian",
+          "Polish",
+          "SimpChinese",
+          "Japanese"
+        ],
+        "customLanguageFiles": {
+          "Polish": "windows/Polish.nsh"
+        }
+      }
     }
   }
 }
