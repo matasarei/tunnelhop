@@ -12,13 +12,14 @@ use std::sync::OnceLock;
 pub const ENGLISH: &str = "en";
 
 /// Every language the app has, by the name of its file.
-pub const LANGUAGES: [&str; 10] = [
-    ENGLISH, "uk", "es", "fr", "de", "pt-BR", "it", "pl", "zh-Hans", "ja",
+pub const LANGUAGES: [&str; 11] = [
+    ENGLISH, "uk", "ru", "es", "fr", "de", "pt-BR", "it", "pl", "zh-Hans", "ja",
 ];
 
-const CATALOGUES: [(&str, &str); 10] = [
+const CATALOGUES: [(&str, &str); 11] = [
     (ENGLISH, include_str!("../../locales/en.json")),
     ("uk", include_str!("../../locales/uk.json")),
+    ("ru", include_str!("../../locales/ru.json")),
     ("es", include_str!("../../locales/es.json")),
     ("fr", include_str!("../../locales/fr.json")),
     ("de", include_str!("../../locales/de.json")),
@@ -218,6 +219,8 @@ mod tests {
         for (preferred, language) in [
             (vec!["uk-UA"], "uk"),
             (vec!["uk"], "uk"),
+            (vec!["ru-RU"], "ru"),
+            (vec!["ru-UA", "ru", "en-US"], "ru"),
             (vec!["UK_ua"], "uk"),
             (vec!["de-AT"], "de"),
             (vec!["es-419"], "es"),
@@ -278,7 +281,7 @@ mod tests {
             assert_eq!(bases(texts), bases(english), "the keys of {language}");
             // The forms a number can ask for in each language (Unicode's plural rules).
             let forms: &[&str] = match language {
-                "uk" | "pl" => &["one", "few", "many", "other"],
+                "uk" | "ru" | "pl" => &["one", "few", "many", "other"],
                 "zh-Hans" | "ja" => &["other"],
                 _ => &["one", "other"],
             };
