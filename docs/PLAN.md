@@ -627,6 +627,30 @@ step (or per closely related pair), opened as a PR against `main`.
       and the sign-in dialog in Russian, plural forms right ("3 сервера").
     - Not checked: the installer's own pages in Russian on screen, the tray. Written without
       a native speaker's review.
+37. [x] Export a bundle, optionally password-protected, and import a protected one. Asked for:
+    an export of the imported profiles in the bundle format, as a zip; then the sign-ins in
+    the manifest, and a password-protected zip rather than 7z.
+    (36 is the single-server rotation step, on its own branch.)
+    - Landed: an optional manifest `credentials` block (SPEC §3.2), moved into DPAPI by the
+      import and never kept in the installed manifest; AES-encrypted entries read with a
+      password, ZipCrypto refused (§3.1, §3.3); `ExportBundle` / `Exported` and
+      `PasswordNeeded` (protocol 4); Export per bundle row and a password prompt on import
+      (§3.6, §5); `docs/manifest.schema.json`.
+    - Rulings: AES zip, not 7z — the import runs as SYSTEM on untrusted input, and a 7z
+      parser is a far larger surface for the same Explorer limitation. Sign-ins in the
+      manifest, not `auth.txt` — it holds one pair for a whole bundle, the store holds a
+      default and per-server ones. `schema_version` stays "1": the block is optional. The
+      password is offered and recommended, not required (as asked); an unprotected export says
+      so on its button. Sign-ins on by default, written per server only where they differ from
+      the default.
+    - Checked in `th-test` (2026-10-11), Windows in Russian: the dialog, the mismatch line and
+      the save dialog; the file written as the user (C:\th refused it, as it should), every
+      entry AES (method 99) with no key or username readable; the bundle deleted and the file
+      imported through the window: wrong password refused, right one imported without asking
+      for a sign-in, and the lab OpenVPN server connected with the sign-in from the file.
+      Found there and fixed: the "exported" notice never showed.
+    - Not checked: 7-Zip opening the file; an unprotected export on screen (covered by tests).
+      Translations written without a native speaker's review.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`

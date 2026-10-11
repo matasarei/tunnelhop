@@ -54,7 +54,9 @@ replaces the service and drivers, not the logic.
 
 - The UI never elevates and never needs to. All privileged work happens in the service.
 - The UI sends bundle **bytes** over the pipe (≤ 20 MB). The service never opens a path chosen
-  by the user, so a SYSTEM process cannot be tricked into reading a file the user cannot.
+  by the user, so a SYSTEM process cannot be tricked into reading a file the user cannot. An
+  export (§3.6) goes the other way: the service answers with the zip's bytes, and the UI writes
+  them where the user chose.
 - The service owns every tunnel. A UI crash changes nothing; a service crash leaves the
   kill-switch in place (fail closed) and the next start reconciles.
 
@@ -87,6 +89,10 @@ bundle.zip
 ```
 
 Only `manifest.json`, `wireguard/**` and `openvpn/**` are accepted.
+
+Entries may be encrypted with AES (the WinZip AE-2 format), as a password-protected export
+writes them (§3.6); the import then needs the password. Entries encrypted with the older
+ZipCrypto are refused, whatever the password: that cipher is broken.
 
 ### 3.2 Manifest
 
@@ -128,6 +134,10 @@ Schema: [`manifest.schema.json`](manifest.schema.json).
 | `profiles[].name` | 1–100 characters. |
 | `profiles[].protocol` | `"wireguard"` or `"openvpn"`. |
 | `profiles[].file` | Relative path, `/`-separated, under `wireguard/` for WireGuard and `openvpn/` for OpenVPN; must exist in the archive. |
+| `credentials` | Optional; OpenVPN sign-ins, as an export with them writes it (§3.6). Not empty. |
+| `credentials.default` | `{ "username", "password" }` for every OpenVPN profile without its own. |
+| `credentials.profiles` | Profile id → `{ "username", "password" }`; the id must be an OpenVPN profile of this bundle. |
+| `…username`, `…password` | 1–256 characters, no line breaks or NUL: each becomes one line of OpenVPN's management protocol. |
 
 Unknown fields anywhere are an error. `bundle_id` is not part of the manifest: it is the first
 16 hex characters of the SHA-256 of the zip bytes.
@@ -143,6 +153,12 @@ Unknown fields anywhere are an error. `bundle_id` is not part of the manifest: i
    rename to `bundles\<bundle_id>\`. On any error the staging directory is deleted and the user
    sees every error found, each with its file and line.
 4. **Re-import** of the same zip is a no-op that returns the existing `bundle_id`.
+5. **Password.** When entries are encrypted, the service answers that a password is needed
+   (or that the one given is wrong) before anything is written; the UI asks for it and sends
+   the same bytes again with it. The password is never stored.
+6. **Sign-ins in the manifest** go into DPAPI secrets like an `auth.txt` (§3.4): the default
+   as the bundle default, the others per profile. The installed `manifest.json` is written
+   without them. A profile signed in by both its `auth.txt` and the manifest is refused.
 
 ### 3.4 Config sanitizing
 
@@ -227,8 +243,27 @@ OpenVPN, with `port` and `proto` defaults applied) are extracted at import for t
      when that server is still in the bundle, so that adding a server does not change the
      public IP; it rotates to another only when the server was removed or one attempt to
      reconnect fails.
-- The UI never reads a bundle's files (they hold private keys); it sends the new files' bytes
-  and receives the result, as an import does.
+- The UI never reads a bundle's files (they hold private keys) except through an export
+  (§3.6); for an edit it sends the new files' bytes and receives the result, as an import does.
+
+### 3.6 Export
+
+The user can export an installed bundle to a zip in the format of §3.1, to keep or to import on
+another PC.
+
+- The service builds it from the installed manifest and the sanitized configs, the way an edit
+  rebuilds a bundle (§3.5): without sign-ins or a password, a bundle made or edited in TunnelHop
+  exports to the very zip it was installed from, so importing it again finds it already there.
+- **Sign-ins** (on by default) go into the manifest's `credentials` (§3.2): the bundle default,
+  and each OpenVPN profile's own where it differs from the default. They are read from the
+  DPAPI secrets only for this. Without them, the import asks for them again.
+- **Password** (offered and recommended, not required): every entry is encrypted with AES-256.
+  Windows Explorer cannot open such a zip; 7-Zip, WinRAR and TunnelHop can.
+- The file holds the servers' private keys, and maybe sign-ins in plain text when unprotected:
+  the UI says so before writing it, and names the unprotected choice on the button.
+- The service answers with the bytes and a file name (the bundle name, made a valid Windows
+  file name); it never writes the file, and nothing changes: not the bundle, its secrets, nor
+  the tunnel. The log records the export, never its content.
 
 ---
 
@@ -356,8 +391,8 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
   found.
   - **Controls:** Connect (a random profile, or the one picked in the profile list), Rotate
     Now, and Disconnect & unblock.
-  - **Bundles:** every installed bundle, the active one marked; switch to another, or delete one
-    (§3.5).
+  - **Bundles:** every installed bundle, the active one marked; switch to another, export one
+    (§3.6), or delete one (§3.5). A protected bundle being imported asks for its password.
   - **Servers:** add `.conf`/`.ovpn` files to the active bundle by picker or drag-and-drop,
     each with an editable name, and remove a server from the profile list (§3.5). With no
     bundle active the same files make a new bundle, named in the same dialog; the empty
