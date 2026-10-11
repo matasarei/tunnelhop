@@ -737,3 +737,44 @@ async fn a_rotation_moves_past_a_server_that_refuses_the_sign_in() {
     rig.rotator.credentials_changed(&[]);
     assert!(rig.rotate().await.is_ok());
 }
+
+// ---- One usable server: nothing to rotate to ------------------------------------------------
+
+#[tokio::test]
+async fn with_one_server_the_timer_never_fires() {
+    let mut rig = Rig::new(manifest(&["wg-a"], "reconnect_random"));
+    let t0 = rig.now;
+    rig.rotate().await.unwrap();
+    rig.log.take();
+    assert!(!rig.rotator.can_rotate());
+    // Auto-rotation is on (the manifest's default) and hours have passed: still not due, so
+    // the tunnel is never dropped to connect the same server again.
+    assert!(rig.rotator.auto_rotate());
+    assert!(!rig.rotator.due(t0 + Duration::from_secs(24 * 3600)));
+    assert!(rig.log.take().is_empty());
+    assert_eq!(rig.rotator.status().state, State::Connected);
+}
+
+#[tokio::test]
+async fn a_server_that_cannot_be_used_does_not_count_as_one_to_rotate_to() {
+    let mut rig = Rig::new(manifest(&["wg-a", "ovpn-b"], "reconnect_random"));
+    let t0 = rig.now;
+    assert!(rig.rotator.can_rotate());
+
+    // The second server waits for credentials: one usable server left.
+    rig.rotator
+        .set_missing_credentials(["ovpn-b".to_string()].into());
+    assert!(!rig.rotator.can_rotate());
+    rig.rotate().await.unwrap();
+    assert!(!rig.rotator.due(t0 + Duration::from_secs(24 * 3600)));
+
+    // Its credentials arrive: two again, and the timer works as before.
+    rig.rotator.set_missing_credentials(Default::default());
+    assert!(rig.rotator.can_rotate());
+    assert!(rig.rotator.due(t0 + Duration::from_secs(60 * 60)));
+
+    // A refused sign-in takes it out the same way.
+    rig.driver.refuse_credentials("ovpn-b", true);
+    let _ = rig.rotator.connect_to("ovpn-b", rig.now).await;
+    assert!(!rig.rotator.can_rotate());
+}
