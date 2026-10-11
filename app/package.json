@@ -14,7 +14,7 @@
     "installer": "tauri build --config src-tauri/tauri.installer.conf.json",
     "test": "vitest run"
   },
-  "license": "UNLICENSED",
+  "license": "MIT OR Apache-2.0",
   "dependencies": {
     "@fluentui/tokens": "1.0.0-alpha.24",
     "@fluentui/web-components": "^3.1.3",
