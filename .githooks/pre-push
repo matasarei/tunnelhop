@@ -28,6 +28,10 @@ step "frontend type check"
 step "frontend tests"
 (cd app && npm test)
 
+# The user guides quote the app's labels; renaming one in app/locales must update them too.
+step "user guides"
+node scripts/check-guides.mjs
+
 step "clippy"
 cargo clippy --workspace --all-targets -- -D warnings
 
