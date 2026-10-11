@@ -36,7 +36,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        # The version the app is developed with; Vite 8 and Vitest 5 refuse older ones.
+        # The version the app is developed and tested with, not whatever the runner ships.
         with:
           node-version: 24
           cache: npm

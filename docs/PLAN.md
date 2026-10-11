@@ -694,8 +694,8 @@ step (or per closely related pair), opened as a PR against `main`.
       `package.json`; the shipped `th-service.exe` is checked for the dev safety timer;
       only that job may write. DEVELOPMENT.md, "Cutting a release", has the procedure.
     - Rulings: drafts only, published by a person (the installer is unsigned); Node 24
-      through `actions/setup-node`, as the app is developed with it and Vite 8 refuses
-      older Node 20 releases. Code signing is not planned.
+      through `actions/setup-node`, the version the app is developed and tested with, not
+      whatever the runner ships. Code signing is not planned.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
