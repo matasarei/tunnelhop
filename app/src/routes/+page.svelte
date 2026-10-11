@@ -542,8 +542,10 @@
     name={locked.path.split(/[\\/]/).pop() ?? locked.path}
     wrong={locked.wrong}
     onunlock={(password) => {
+      // Read first: `locked` follows `unlocking`, and is gone once that is cleared.
+      const { path } = locked;
       unlocking = null;
-      importFrom(locked.path, password);
+      importFrom(path, password);
     }}
     oncancel={() => (unlocking = null)}
   />
@@ -554,8 +556,10 @@
   <Export
     {bundle}
     onclose={(saved) => {
+      // Read first: `bundle` follows `exporting`, and is gone once that is cleared.
+      const name = bundle.bundle_name;
       exporting = null;
-      if (saved) notice = t("notice.exported", { bundle: bundle.bundle_name });
+      if (saved) notice = t("notice.exported", { bundle: name });
     }}
   />
 {/if}
