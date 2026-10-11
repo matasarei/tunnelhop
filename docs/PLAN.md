@@ -617,6 +617,16 @@ step (or per closely related pair), opened as a PR against `main`.
       both OpenVPN servers of the bundle.
     - Not done: changing a sign-in that the server accepts (there is still no button for
       it), and the same handling when a tunnel that was up loses its sign-in mid-session.
+35. [x] Russian, as an eleventh language for the app and the installer. On the PC, whose
+    Windows is in Russian, the app showed English.
+    - Landed: `app/locales/ru.json`; Russian in `lang.rs`, `i18n.ts`, the installer's
+      `languages` and `messages.nsh`; SPEC §5 and TESTING §3 say eleven.
+    - The sign-in dialog now always says it wants the provider's OpenVPN pair, not the
+      account's sign-in (landed with step 34's branch).
+    - Checked in `th-test` (2026-10-11), Windows in Russian, no `TUNNELHOP_LANG`: the window
+      and the sign-in dialog in Russian, plural forms right ("3 сервера").
+    - Not checked: the installer's own pages in Russian on screen, the tray. Written without
+      a native speaker's review.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
