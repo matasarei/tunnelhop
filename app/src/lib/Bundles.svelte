@@ -1,5 +1,6 @@
 <script lang="ts">
-  // The installed bundles (SPEC §3.5): which one is in use, switch to another, delete one.
+  // The installed bundles (SPEC §3.5): which one is in use, switch to another, export one,
+  // delete one.
   import { t, tn } from "$lib/i18n";
   import type { Bundle, BundleList } from "$lib/ipc";
 
@@ -7,11 +8,13 @@
     list,
     busy,
     onswitch,
+    onexport,
     ondelete,
   }: {
     list: BundleList;
     busy: boolean;
     onswitch: (bundle: Bundle) => void;
+    onexport: (bundle: Bundle) => void;
     ondelete: (bundle: Bundle) => void;
   } = $props();
 
@@ -36,6 +39,17 @@
         {:else if bundle.profiles.length > 0}
           <fluent-button size="small" appearance="subtle" disabled={busy} onclick={() => onswitch(bundle)}>
             {t("action.switch")}
+          </fluent-button>
+        {/if}
+        {#if bundle.profiles.length > 0}
+          <fluent-button
+            size="small"
+            appearance="subtle"
+            disabled={busy}
+            aria-label={t("bundles.export_label", { bundle: bundle.bundle_name })}
+            onclick={() => onexport(bundle)}
+          >
+            {t("action.export")}
           </fluent-button>
         {/if}
         <fluent-button

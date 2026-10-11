@@ -61,9 +61,22 @@ export const status = () => invoke<Report | null>("status");
 export const intervals = () => invoke<[number, string][]>("intervals");
 export const act = (action: Action) => invoke<void>("act", { action });
 
-/** Import the file at `path` (dropped on the window), or one chosen in the native picker. */
-export const importBundle = (path?: string) =>
-  invoke<ImportOutcome>("import_bundle", { path: path ?? null });
+/** A password-protected bundle: import the file at `path` again with its password. */
+export type Locked = { type: "locked"; path: string; wrong: boolean };
+
+/**
+ * Import the file at `path` (dropped on the window), or one chosen in the native picker; with
+ * `password` when the service asked for one.
+ */
+export const importBundle = (path?: string, password?: string) =>
+  invoke<ImportOutcome | Locked>("import_bundle", { path: path ?? null, password: password ?? null });
+
+/**
+ * Export a bundle to a file chosen in the save dialog, with its OpenVPN sign-ins and protected
+ * by `password` when asked. True once the file is written, false when the dialog was closed.
+ */
+export const exportBundle = (bundleId: string, includeSignIns: boolean, password: string | null) =>
+  invoke<boolean>("export_bundle", { bundleId, includeSignIns, password });
 
 export const selectBundle = (bundleId: string) => invoke<void>("select_bundle", { bundleId });
 
