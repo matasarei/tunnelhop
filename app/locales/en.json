@@ -150,6 +150,10 @@
   "signin.username": "Username",
   "signin.password": "Password",
   "signin.stored": "Stored by the TunnelHop service, encrypted for this PC. The app keeps no copy.",
+  "signin.asks": "This server asks for a username and password.",
+  "signin.refused": "The server refused the saved username and password. Enter them again.",
+  "signin.provider_hint": "Enter the OpenVPN username and password from your VPN provider, not the sign-in of your account with them. Proton VPN, for example, shows them under Account → OpenVPN / IKEv2 username.",
+  "signin.everywhere": "Use for every OpenVPN server in this bundle",
 
   "runtime.missing": "{name} is not installed",
   "runtime.unchecked": "{name} could not be checked ({required} or newer is needed)",

@@ -35,7 +35,7 @@
   /** An imported bundle not made active yet, because that would drop the current tunnel. */
   let pendingSwitch = $state<Bundle | null>(null);
   /** The credentials dialog: for a whole bundle (profile null) or one server. */
-  let asking = $state<{ bundle: Bundle; profile: Profile | null } | null>(null);
+  let asking = $state<{ bundle: Bundle; profile: Profile | null; refused?: boolean } | null>(null);
   /** The protocol whose missing or outdated program is being explained. */
   let explaining = $state<Protocol | null>(null);
   let dragging = $state(false);
@@ -73,6 +73,16 @@
         // The service came or went, or another bundle is active: the list may have changed.
         if ((before === null) !== (report === null) || before?.bundle?.bundle_id !== report?.bundle?.bundle_id)
           refreshBundles();
+        // A server that had a sign-in and now needs one has just refused it: ask for a new
+        // one, as after an import. Its "Sign in" button stays if this is dismissed.
+        const now = report?.bundle;
+        const was = before?.bundle;
+        if (now && was?.bundle_id === now.bundle_id && !asking) {
+          const refused = now.profiles.find(
+            (p) => !p.has_credentials && was.profiles.find((old) => old.id === p.id)?.has_credentials,
+          );
+          if (refused) asking = { bundle: now, profile: refused, refused: true };
+        }
         // A tunnel up again answers the last alert.
         if (e.payload?.state === "connected") alert = null;
         // The bundle waiting for "Switch now" became the active one some other way.
@@ -352,7 +362,8 @@
       <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label={t("bar.dismiss")} onclick={() => (alert = null)}>{@render cross()}</fluent-button>
     </fluent-message-bar>
   {/if}
-  {#if error}
+  <!-- A failed connect comes back twice, as the answer and inside the service's alert. -->
+  {#if error && !alert?.includes(error)}
     <fluent-message-bar intent="error" layout="multiline">
       {error}
       <fluent-button slot="dismiss" appearance="transparent" size="small" icon-only aria-label={t("bar.dismiss")} onclick={() => (error = null)}>{@render cross()}</fluent-button>
@@ -504,7 +515,7 @@
 </main>
 
 {#if asking}
-  <Credentials bundle={asking.bundle} profile={asking.profile} onclose={() => (asking = null)} />
+  <Credentials bundle={asking.bundle} profile={asking.profile} refused={asking.refused} onclose={() => (asking = null)} />
 {/if}
 
 {#if unusable}

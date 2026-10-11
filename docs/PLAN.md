@@ -585,6 +585,24 @@ step (or per closely related pair), opened as a PR against `main`.
 33. [ ] The installer in the same ten languages: Tauri's NSIS `languages`, and TunnelHop's
     own messages in `hooks.nsh` as `LangString`s. Open: whether Tauri ships Ukrainian,
     Polish and Italian for its standard pages.
+34. [x] A server that refuses the saved sign-in is asked about, not retried. On the PC,
+    Proton's OpenVPN server answered AUTH_FAILED: it was tried three times with traffic
+    blocked, and the saved sign-in could not be changed (re-adding the server reuses the
+    bundle's).
+    - Landed: `DriverError::CredentialsRefused`; the engine remembers such a profile
+      (`refused_credentials`), tries it once, leaves it out of rotation and refuses a
+      connect by name until `SetCredentials`; the status reports it as having no
+      credentials. The window opens the sign-in dialog by itself, offers the new sign-in
+      for every OpenVPN server of the bundle, drops spaces around a pasted value, and shows
+      a failed connect once.
+    - Ruling: remembered in memory only; after a service restart the server is tried once
+      more. No protocol change: a refused sign-in reads as `has_credentials: false`.
+    - Checked in `th-test` (2026-10-11) against the lab's OpenVPN server, which checks the
+      sign-in: a wrong password gave one attempt, one error bar and the dialog with the
+      refusal; the right one, typed with a trailing space and "every server" on, connected
+      both OpenVPN servers of the bundle.
+    - Not done: changing a sign-in that the server accepts (there is still no button for
+      it), and the same handling when a tunnel that was up loses its sign-in mid-session.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`

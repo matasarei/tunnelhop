@@ -351,6 +351,9 @@ mod driver {
                     self.remove_files(tunnel);
                     return Err(match e {
                         DriverError::Timeout(_) => DriverError::Timeout(detail),
+                        // Kept as it is: the engine acts on it, and its reason is in the
+                        // name, not in the log.
+                        DriverError::CredentialsRefused => DriverError::CredentialsRefused,
                         _ => DriverError::Failed(detail),
                     });
                 }
@@ -508,9 +511,7 @@ mod driver {
                     answerer.answer(management, &realm).await?
                 }
                 Notification::CredentialsRefused { .. } => {
-                    return Err(DriverError::Failed(
-                        "the server refused the username and password".into(),
-                    ));
+                    return Err(DriverError::CredentialsRefused);
                 }
                 Notification::Fatal(message) => {
                     return Err(DriverError::Failed(format!("OpenVPN gave up: {message}")));

@@ -38,6 +38,7 @@ pub struct MockDriver {
     log: CallLog,
     next_interface: AtomicU64,
     fail_connect: Mutex<HashSet<String>>,
+    refuse_credentials: Mutex<HashSet<String>>,
     fail_disconnect: AtomicBool,
     events: broadcast::Sender<TunnelEvent>,
 }
@@ -48,6 +49,7 @@ impl MockDriver {
             log,
             next_interface: AtomicU64::new(1),
             fail_connect: Mutex::new(HashSet::new()),
+            refuse_credentials: Mutex::new(HashSet::new()),
             fail_disconnect: AtomicBool::new(false),
             events: broadcast::channel(16).0,
         }
@@ -63,6 +65,17 @@ impl MockDriver {
             .lock()
             .unwrap()
             .insert(profile_id.to_string());
+    }
+
+    /// Whether connecting to `profile_id` ends as a server refusing the username and
+    /// password does.
+    pub fn refuse_credentials(&self, profile_id: &str, refuse: bool) {
+        let mut refused = self.refuse_credentials.lock().unwrap();
+        if refuse {
+            refused.insert(profile_id.to_string());
+        } else {
+            refused.remove(profile_id);
+        }
     }
 
     pub fn fail_disconnect(&self, fail: bool) {
@@ -81,6 +94,14 @@ impl VpnDriver for MockDriver {
             .contains(&profile.profile_id)
         {
             return Err(DriverError::Failed("mock connect failure".into()));
+        }
+        if self
+            .refuse_credentials
+            .lock()
+            .unwrap()
+            .contains(&profile.profile_id)
+        {
+            return Err(DriverError::CredentialsRefused);
         }
         Ok(TunnelHandle {
             profile_id: profile.profile_id.clone(),
