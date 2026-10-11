@@ -1,8 +1,9 @@
 // Checks that the user guides still match the app (docs/guide/<lang>.md):
 //
 // - every **bold** span in a guide is a label the app shows, written exactly as in
-//   app/locales/<lang>.json ({placeholders} match any text). The guides keep bold for the
-//   app's own labels; Windows' labels and emphasis are in italics;
+//   app/locales/<lang>.json. A label with a {placeholder} is quoted with it as is: matching
+//   "Delete {bundle}" against any text would let "Delete servers" through. The guides keep
+//   bold for the app's own labels; Windows' labels and emphasis are in italics;
 // - every guide has the same sections (## and ###) as the English one, in the same order;
 // - every relative link in README.md and the guides points at a tracked file.
 //
@@ -23,13 +24,6 @@ function labels(lang) {
   const walk = (value) =>
     typeof value === "string" ? [value] : Object.values(value).flatMap(walk);
   return walk(JSON.parse(readFileSync(join(root, "app", "locales", `${lang}.json`), "utf8")));
-}
-
-/** A label as a whole-string pattern, each {placeholder} standing for any text. */
-function pattern(label) {
-  const parts = label.split(/\{[a-z_]+\}/);
-  const escaped = parts.map((p) => p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-  return new RegExp(`^${escaped.join(".+")}$`, "u");
 }
 
 /** The lines of a markdown file, with fenced code blocks blanked out. */
@@ -68,9 +62,9 @@ for (const lang of langs) {
   const file = join(guides, `${lang}.md`);
   const shown = relative(root, file).replaceAll("\\", "/");
   const lines = prose(file);
-  const patterns = labels(lang).map(pattern);
+  const known = new Set(labels(lang));
   for (const span of bold(lines)) {
-    if (!patterns.some((p) => p.test(span.text))) {
+    if (!known.has(span.text)) {
       problems.push(`${shown}:${span.line}: **${span.text}** is not a label in app/locales/${lang}.json`);
     }
   }
