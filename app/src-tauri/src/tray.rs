@@ -223,12 +223,15 @@ mod menu {
             self.icon.set_tooltip(Some(tooltip(&text)))?;
             let reachable = report.is_some();
             let has_bundle = report.is_some_and(|r| r.bundle.is_some());
-            self.rotate.set_enabled(has_bundle)?;
-            self.auto.set_enabled(reachable)?;
+            // Without a second server there is nothing to rotate to; the checks still show
+            // the stored settings, which apply again once there is one.
+            let rotatable = report.is_some_and(|r| r.rotatable);
+            self.rotate.set_enabled(has_bundle && rotatable)?;
+            self.auto.set_enabled(reachable && rotatable)?;
             self.auto
                 .set_checked(report.is_some_and(|r| r.auto_rotate))?;
             for (minutes, item) in &self.intervals {
-                item.set_enabled(reachable)?;
+                item.set_enabled(reachable && rotatable)?;
                 item.set_checked(report.is_some_and(|r| r.interval_minutes == *minutes))?;
             }
             // Also when blocked with no bundle: "unblock" is the way out of a crash's block.

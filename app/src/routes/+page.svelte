@@ -305,6 +305,8 @@
   const reachable = $derived(report !== null);
   const connected = $derived(report?.state === "connected");
   const blocked = $derived(report?.state === "blocked");
+  /** There is another server to rotate to: without one, the rotation controls are greyed out. */
+  const rotatable = $derived(report?.rotatable ?? false);
   const engaged = $derived(!!report && (report.killswitch_engaged || report.state !== "disconnected"));
   const profileName = $derived(
     report?.bundle?.profiles.find((p) => p.id === report?.profile_id)?.name ?? report?.profile_id ?? null,
@@ -417,8 +419,13 @@
   </section>
 
   <div class="actions">
-    {#if connected || blocked}
-      <fluent-button appearance="primary" disabled={!report?.bundle || busy} onclick={() => act({ type: "rotate" })}>
+    <!-- Blocked with one server: Connect is the way out, since there is nothing to rotate to. -->
+    {#if connected || (blocked && rotatable)}
+      <fluent-button
+        appearance="primary"
+        disabled={!report?.bundle || busy || !rotatable}
+        onclick={() => act({ type: "rotate" })}
+      >
         {t("action.rotate")}
       </fluent-button>
     {:else}
@@ -476,6 +483,9 @@
   </section>
 
   <h2>{t("rotation.heading")}</h2>
+  {#if reachable && !rotatable}
+    <p class="hint single">{t("rotation.single")}</p>
+  {/if}
   <section class="card rows">
     <div class="row">
       <div>
@@ -484,7 +494,7 @@
       </div>
       <fluent-switch
         checked={report?.auto_rotate ?? false}
-        disabled={!reachable || busy}
+        disabled={!reachable || busy || !rotatable}
         aria-label={t("rotation.auto")}
         onchange={(e: Event) => act({ type: "set_auto_rotate", enabled: (e.currentTarget as HTMLInputElement).checked })}
       ></fluent-switch>
@@ -496,7 +506,7 @@
       </div>
       <fluent-dropdown
         aria-label={t("rotation.interval")}
-        disabled={!reachable || busy}
+        disabled={!reachable || busy || !rotatable}
         onchange={(e: Event) => act({ type: "set_interval", minutes: Number((e.currentTarget as HTMLSelectElement).value) })}
       >
         <fluent-listbox>
@@ -668,6 +678,9 @@
   /* Fluent keeps room for action buttons under the text even when a bar has none. */
   fluent-message-bar:not(:has([slot="actions"])) {
     padding-block-end: 0;
+  }
+  .single {
+    margin: -4px 0 8px;
   }
   .heading {
     display: flex;
