@@ -129,6 +129,7 @@
   "rotation.auto.hint": "按定时切换到另一个服务器",
   "rotation.interval": "间隔",
   "rotation.interval.hint": "开启自动更换时多久切换一次",
+  "rotation.single": "更换服务器至少需要两个可用的服务器。添加第二个后，这些设置会重新生效。",
 
   "exit.button": "退出 TunnelHop",
   "exit.hint": "断开连接、解除阻止并关闭应用。关闭窗口时应用会留在托盘中。",

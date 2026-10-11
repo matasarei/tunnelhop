@@ -28,6 +28,8 @@ export type Report = {
   bundle: Bundle | null;
   auto_rotate: boolean;
   interval_minutes: number;
+  /** Whether there is another server to rotate to. */
+  rotatable: boolean;
   runtimes: { protocol: Protocol; availability: Availability }[];
 };
 

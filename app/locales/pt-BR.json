@@ -134,6 +134,7 @@
   "rotation.auto.hint": "Mudar para outro servidor em intervalos regulares",
   "rotation.interval": "Intervalo",
   "rotation.interval.hint": "Com que frequência trocar enquanto a troca automática está ativada",
+  "rotation.single": "A troca de servidor precisa de pelo menos dois servidores utilizáveis. Assim que houver um segundo, estas configurações voltam a valer.",
 
   "exit.button": "Sair do TunnelHop",
   "exit.hint": "Desconecta, remove o bloqueio e fecha o aplicativo. Fechar a janela o mantém na área de notificação.",

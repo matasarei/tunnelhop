@@ -144,6 +144,7 @@
   "rotation.auto.hint": "Przechodź na inny serwer co określony czas",
   "rotation.interval": "Odstęp",
   "rotation.interval.hint": "Jak często zmieniać serwer, gdy automatyczna zmiana jest włączona",
+  "rotation.single": "Zmiana serwera wymaga co najmniej dwóch dostępnych serwerów. Gdy pojawi się drugi, te ustawienia znów zaczną działać.",
 
   "exit.button": "Zakończ TunnelHop",
   "exit.hint": "Rozłącza, zdejmuje blokadę i zamyka aplikację. Zamknięcie okna pozostawia ją w zasobniku.",

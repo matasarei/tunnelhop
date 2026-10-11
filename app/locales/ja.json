@@ -129,6 +129,7 @@
   "rotation.auto.hint": "タイマーで別のサーバーに切り替えます",
   "rotation.interval": "間隔",
   "rotation.interval.hint": "自動切り替えがオンのときに切り替える頻度",
+  "rotation.single": "サーバーの切り替えには、使用できるサーバーが 2 台以上必要です。2 台目が加わると、これらの設定が再び有効になります。",
 
   "exit.button": "TunnelHop を終了",
   "exit.hint": "切断してブロックを解除し、アプリを閉じます。ウィンドウを閉じた場合はトレイに残ります。",

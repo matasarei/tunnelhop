@@ -239,10 +239,17 @@ impl Rotator {
         Duration::from_secs(u64::from(minutes) * 60)
     }
 
+    /// Whether there is another server to rotate to: more than one profile can be used.
+    /// With one, a rotation would only drop the tunnel and connect the same server again.
+    pub fn can_rotate(&self) -> bool {
+        self.usable_profiles().len() > 1
+    }
+
     /// Whether the interval timer should rotate now.
     pub fn due(&self, now: Instant) -> bool {
         self.state == State::Connected
             && self.auto_rotate()
+            && self.can_rotate()
             && self
                 .connected_at
                 .is_some_and(|at| now.duration_since(at) >= self.interval())

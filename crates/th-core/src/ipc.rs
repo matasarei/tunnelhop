@@ -25,7 +25,7 @@ use crate::rotation::State;
 /// Raised whenever a request, response or event is added or changed: a client and a service
 /// from different versions then refuse each other at `Hello` instead of failing later on a
 /// message one of them cannot parse.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 /// Largest line either side accepts: a maximal bundle in base64 plus the envelope.
 pub const MAX_FRAME_BYTES: usize = MAX_ZIP_BYTES / 3 * 4 + 64 * 1024;
 
@@ -415,6 +415,9 @@ pub struct StatusReport {
     pub bundle: Option<BundleInfo>,
     pub auto_rotate: bool,
     pub interval_minutes: u32,
+    /// Whether there is another server to rotate to (SPEC §4.5). Without one the timer does
+    /// not fire and "Rotate now" is refused; the window and the tray grey them out.
+    pub rotatable: bool,
     pub runtimes: Vec<RuntimeInfo>,
 }
 

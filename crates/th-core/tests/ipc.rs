@@ -29,6 +29,7 @@ fn report() -> StatusReport {
         }),
         auto_rotate: true,
         interval_minutes: 15,
+        rotatable: false,
         runtimes: vec![
             RuntimeInfo {
                 protocol: Protocol::Wireguard,

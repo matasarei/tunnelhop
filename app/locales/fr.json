@@ -134,6 +134,7 @@
   "rotation.auto.hint": "Passer à un autre serveur à intervalles réguliers",
   "rotation.interval": "Intervalle",
   "rotation.interval.hint": "Fréquence du changement lorsque le changement automatique est activé",
+  "rotation.single": "Le changement de serveur nécessite au moins deux serveurs utilisables. Dès qu’il y en a un deuxième, ces réglages s’appliquent de nouveau.",
 
   "exit.button": "Quitter TunnelHop",
   "exit.hint": "Déconnecte, lève le blocage et ferme l’application. Fermer la fenêtre la laisse dans la zone de notification.",

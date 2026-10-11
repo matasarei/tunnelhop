@@ -134,6 +134,7 @@
   "rotation.auto.hint": "Passa a un altro server a intervalli regolari",
   "rotation.interval": "Intervallo",
   "rotation.interval.hint": "Ogni quanto cambiare quando il cambio automatico è attivo",
+  "rotation.single": "Il cambio server richiede almeno due server utilizzabili. Appena ce n’è un secondo, queste impostazioni tornano a valere.",
 
   "exit.button": "Esci da TunnelHop",
   "exit.hint": "Disconnette, rimuove il blocco e chiude l’app. Chiudendo la finestra, l’app resta nell’area di notifica.",

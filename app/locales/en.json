@@ -134,6 +134,7 @@
   "rotation.auto.hint": "Hop to another server on a timer",
   "rotation.interval": "Interval",
   "rotation.interval.hint": "How often to hop while auto-rotation is on",
+  "rotation.single": "Rotation needs at least two usable servers. It picks up these settings again once there is a second one.",
 
   "exit.button": "Exit TunnelHop",
   "exit.hint": "Disconnects, lifts the block, and closes the app. Closing the window keeps it in the tray.",

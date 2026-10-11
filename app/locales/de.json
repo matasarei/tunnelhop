@@ -134,6 +134,7 @@
   "rotation.auto.hint": "Zeitgesteuert zu einem anderen Server wechseln",
   "rotation.interval": "Intervall",
   "rotation.interval.hint": "Wie oft gewechselt wird, wenn der automatische Wechsel an ist",
+  "rotation.single": "Der Serverwechsel braucht mindestens zwei nutzbare Server. Sobald ein zweiter da ist, gelten diese Einstellungen wieder.",
 
   "exit.button": "TunnelHop beenden",
   "exit.hint": "Trennt, hebt die Blockierung auf und schließt die App. Beim Schließen des Fensters bleibt sie im Infobereich.",
