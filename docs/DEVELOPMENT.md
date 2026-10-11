@@ -237,7 +237,8 @@ scripts\vm.ps1 test killswitch_live -Env @{ TH_WG_CONFIG = 'C:\th\configs\wg-a.c
 scripts\vm.ps1 test killswitch_live -Features dev-safety -Env @{ TH_DEV_SAFETY_SECONDS = '3' }
 scripts\vm.ps1 run 'C:\th\th-service.exe disengage'
 scripts\vm.ps1 restore before-wg
-scripts\vm.ps1 test ovpn_live                       # the OpenVPN driver (step 16)
+scripts\vm.ps1 test ovpn_live                       # the OpenVPN driver (step 16), about 1 min
+scripts\vm.ps1 test svc_live                        # install, crash, uninstall; TunnelHop not installed
 ```
 
 - **Take the checkpoint after `configs`**, not before: restoring it otherwise brings back the
@@ -248,6 +249,8 @@ scripts\vm.ps1 test ovpn_live                       # the OpenVPN driver (step 1
   Disable it for the copy:
   `scripts\vm.ps1 run 'Set-Service TunnelHop -StartupType Disabled; Stop-Service TunnelHop'`,
   then `copy`, then `Set-Service TunnelHop -StartupType Automatic; Start-Service TunnelHop`.
+- `svc_live` drives the `th-service.exe` that `copy` put in `C:\th` and stops at once when
+  TunnelHop is already installed: run it from a checkpoint without it.
 - `ovpn_live` keeps each test's files under `C:\th\ovpn-live\<test>\`, including OpenVPN's own
   log in `logs\`, so a failure can be read afterwards.
 
