@@ -641,11 +641,12 @@ async fn profiles_behind_a_different_entry_are_tried_first() {
         "reconnect_random",
     ));
     rig.rotator.set_entry_hosts(HashMap::from([
-        ("wg-a".to_string(), vec!["149.88.110.33".to_string()]),
-        ("wg-b".to_string(), vec!["130.195.241.2".to_string()]),
-        // Same entry as wg-a, like Proton's UA#21 (WireGuard) and UA#39 (OpenVPN).
-        ("ovpn-c".to_string(), vec!["149.88.110.33".to_string()]),
-        ("wg-d".to_string(), vec!["149.88.110.33".to_string()]),
+        ("wg-a".to_string(), vec!["198.51.100.40".to_string()]),
+        ("wg-b".to_string(), vec!["203.0.113.40".to_string()]),
+        // Same entry as wg-a: a provider may route several exits, WireGuard and OpenVPN
+        // alike, through one entry address.
+        ("ovpn-c".to_string(), vec!["198.51.100.40".to_string()]),
+        ("wg-d".to_string(), vec!["198.51.100.40".to_string()]),
     ]));
     rig.rotator.connect_to("wg-a", rig.now).await.unwrap();
     rig.log.take();

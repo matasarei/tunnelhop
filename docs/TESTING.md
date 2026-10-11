@@ -112,7 +112,7 @@ against the installed release build on 2026-10-10 unless another date is given.
 
 | # | Criterion | How it is checked | Last result |
 |---|---|---|---|
-| 1 | `cargo test -p th-core` passes on Linux and Windows | CI job `th-core (Linux)`; on Windows by the pre-push hook on the PC. CI's Windows job has run only the release gate since 2026-10-10, to save minutes | Pass (CI on PR #16; hook on every push) |
+| 1 | `cargo test -p th-core` passes on Linux and Windows | CI job `th-core (platform-independent)`, on a Linux runner; on Windows by the pre-push hook on the PC. CI's Windows job has run only the release gate since 2026-10-10, to save minutes | Pass (CI on PR #16; hook on every push) |
 | 2 | Hostile zips are refused and leave nothing behind | `crates/th-core/tests/bundle.rs` | Pass |
 | 3 | Script, plugin and file directives are refused with file and line; so are WireGuard hooks | `crates/th-core/tests/sanitize.rs` | Pass |
 | 4 | No plaintext `auth.txt` on disk; the store is unreadable by standard users | Live: import `bundle-authfile.zip`, search `%ProgramData%\TunnelHop` for `auth.txt` and for the password, `icacls` on `bundles`, `tunnels`, `secrets`, then connect | Pass: no `auth.txt`, no file holds the username or password, one sealed `.cred` file that even an administrator cannot read; `bundles` and `tunnels` grant SYSTEM and Administrators only, `secrets` grants Administrators list-and-delete only; the profile connected with the sealed credentials |
