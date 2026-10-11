@@ -25,6 +25,9 @@ fi
 step "frontend type check"
 (cd app && npm run check)
 
+step "frontend tests"
+(cd app && npm test)
+
 step "clippy"
 cargo clippy --workspace --all-targets -- -D warnings
 
