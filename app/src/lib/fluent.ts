@@ -21,3 +21,15 @@ export function followSystemTheme(): () => void {
   dark.addEventListener("change", apply);
   return () => dark.removeEventListener("change", apply);
 }
+
+/**
+ * `use:disabledAttribute={…}` for a Fluent switch. Its `disabled` property and its `disabled`
+ * attribute are separate, and only the attribute greys it out. Svelte sets the property, which
+ * left a disabled switch ignoring clicks but still coloured as on. Setting the attribute sets
+ * the property too.
+ */
+export function disabledAttribute(node: HTMLElement, disabled: boolean) {
+  const apply = (value: boolean) => node.toggleAttribute("disabled", value);
+  apply(disabled);
+  return { update: apply };
+}
