@@ -76,14 +76,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    flex-wrap: wrap;
+    gap: 4px 16px;
     min-height: 36px;
     padding: 6px 16px;
   }
   .row + .row {
     border-top: 1px solid var(--colorNeutralStroke2, #e0e0e0);
   }
+  /* The name keeps room to be told apart: in a narrow window the buttons go below it. */
   .who {
+    flex: 1 1 160px;
     min-width: 0;
   }
   .name {
@@ -100,5 +103,6 @@
     align-items: center;
     gap: 8px;
     flex: none;
+    margin-left: auto;
   }
 </style>
