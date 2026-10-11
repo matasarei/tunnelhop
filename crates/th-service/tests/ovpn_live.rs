@@ -39,10 +39,15 @@ fn configs() -> PathBuf {
 
 /// A client config from `test-infra/out/`, resolved the way the orchestrator will.
 fn profile(file: &str, profile_id: &str) -> ResolvedProfile {
-    let config = configs().join(file);
+    profile_at(configs().join(file), profile_id)
+}
+
+/// The config at `config`, resolved the way the orchestrator will.
+fn profile_at(config: PathBuf, profile_id: &str) -> ResolvedProfile {
     let text = std::fs::read_to_string(&config)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", config.display()));
-    let sanitized = openvpn::sanitize(file, &text, &|_| None).expect("a valid test config");
+    let file = config.file_name().unwrap().to_string_lossy().into_owned();
+    let sanitized = openvpn::sanitize(&file, &text, &|_| None).expect("a valid test config");
     let endpoints = sanitized
         .endpoints
         .iter()
@@ -257,5 +262,49 @@ async fn a_tunnel_killed_with_the_service_is_cleared_on_the_next_start() {
 
     let restarted = driver(&layout, None);
     assert_eq!(restarted.reconcile().await.unwrap(), Vec::new());
+    assert_gone(&layout);
+}
+
+#[tokio::test]
+#[ignore = "starts a real OpenVPN: th-test VM only"]
+async fn a_server_that_never_answers_times_out_and_leaves_nothing() {
+    in_test_vm();
+    let layout = layout("timeout");
+    // The lab's config, pointed at an address reserved for documentation: nothing answers.
+    let lab = std::fs::read_to_string(configs().join("ovpn.ovpn")).unwrap();
+    let silent: String = lab
+        .lines()
+        .map(|line| {
+            if line.starts_with("remote ") {
+                "remote 192.0.2.10 1194".to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let config = PathBuf::from(r"C:\th\ovpn-live\timeout-silent.ovpn");
+    std::fs::write(&config, silent + "\n").unwrap();
+    let profile = profile_at(config, "live-silent");
+
+    let started = std::time::Instant::now();
+    let error = driver(&layout, None).connect(&profile).await.unwrap_err();
+    let took = started.elapsed();
+
+    assert!(
+        error.to_string().contains("did not connect within 60 s"),
+        "{error}"
+    );
+    assert!(
+        (55..=90).contains(&took.as_secs()),
+        "gave up after {took:?}, not the 60 s bound"
+    );
+    assert_eq!(openvpn_processes(), 0, "openvpn.exe is gone");
+    let routes = routes();
+    assert!(
+        !routes.contains("192.0.2.10"),
+        "no route to the silent server is left:
+{routes}"
+    );
     assert_gone(&layout);
 }
