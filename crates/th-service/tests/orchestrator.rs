@@ -776,6 +776,15 @@ async fn a_damaged_bundle_is_listed_so_that_it_can_be_deleted() {
 
     let (bundles, _) = listed(lab.orchestrator.handle(Request::ListBundles).await);
     assert_eq!(bundles, [("Damaged bundle".to_string(), id.clone())]);
+    let export = lab
+        .orchestrator
+        .handle(Request::ExportBundle {
+            bundle_id: id.clone(),
+            include_sign_ins: false,
+            password: None,
+        })
+        .await;
+    assert!(is_error(&export, "is damaged"), "{export:?}");
     assert_eq!(listed(delete(&lab, &id).await), (Vec::new(), None));
 }
 

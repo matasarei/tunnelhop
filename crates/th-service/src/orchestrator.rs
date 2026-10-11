@@ -675,9 +675,14 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             return error("bundle id must be 16 lowercase hex characters");
         };
         let root = self.layout.bundles();
+        match bundle::installed(&root) {
+            Ok(installed) if installed.contains(&id) => {}
+            Ok(_) => return error(format!("bundle {id} is not installed")),
+            Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
+        }
         let bundle = match bundle::open(&root, &id) {
             Ok(bundle) => bundle,
-            Err(_) => return error(format!("bundle {id} is not installed")),
+            Err(_) => return error(format!("bundle {id} is damaged and cannot be exported")),
         };
         let sign_ins = if include_sign_ins {
             match self.credentials.sign_ins(&id, &bundle.manifest) {
