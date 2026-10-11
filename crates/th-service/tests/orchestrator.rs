@@ -150,6 +150,7 @@ async fn imported_and_selected(lab: &Lab) -> String {
         .orchestrator
         .handle(Request::ImportBundle {
             zip_base64: ipc::encode_zip(&bundle_zip(MANIFEST)),
+            password: None,
         })
         .await;
     let Response::Imported { bundle, .. } = response else {
@@ -186,6 +187,7 @@ async fn an_import_reports_the_profiles_still_waiting_for_credentials() {
         .orchestrator
         .handle(Request::ImportBundle {
             zip_base64: ipc::encode_zip(&bundle_zip(MANIFEST)),
+            password: None,
         })
         .await;
     let Response::Imported {
@@ -214,6 +216,7 @@ async fn a_hostile_bundle_is_refused_with_its_errors() {
         .orchestrator
         .handle(Request::ImportBundle {
             zip_base64: ipc::encode_zip(&bundle_zip(&hostile)),
+            password: None,
         })
         .await;
     let Response::ImportFailed { errors } = response else {
@@ -520,6 +523,7 @@ async fn selecting_another_bundle_first_leaves_the_current_one() {
         .orchestrator
         .handle(Request::ImportBundle {
             zip_base64: ipc::encode_zip(&bundle_zip(&other)),
+            password: None,
         })
         .await
     else {
@@ -561,6 +565,7 @@ async fn imported_as(lab: &Lab, name: &str) -> String {
         .orchestrator
         .handle(Request::ImportBundle {
             zip_base64: ipc::encode_zip(&bundle_zip(&manifest)),
+            password: None,
         })
         .await;
     match response {
@@ -737,6 +742,7 @@ async fn a_21st_bundle_is_refused_but_an_installed_one_imports_again() {
         lab.orchestrator
             .handle(Request::ImportBundle {
                 zip_base64: ipc::encode_zip(&bundle_zip(&one_more)),
+                password: None,
             })
             .await
     };
@@ -1192,7 +1198,10 @@ async fn a_zip_of_bare_configs_imports_as_a_bundle() {
         let orchestrator = &lab.orchestrator;
         async move {
             orchestrator
-                .handle(Request::ImportBundle { zip_base64 })
+                .handle(Request::ImportBundle {
+                    zip_base64,
+                    password: None,
+                })
                 .await
         }
     };
@@ -1433,4 +1442,135 @@ async fn a_refused_sign_in_is_reported_as_missing_until_it_is_given_again() {
     let status = report(lab.orchestrator.handle(connect()).await);
     assert_eq!(status.state, State::Connected);
     assert_eq!(status.profile_id.as_deref(), Some("ovpn"));
+}
+
+async fn import_with(lab: &Lab, zip: &[u8], password: Option<&str>) -> Response {
+    lab.orchestrator
+        .handle(Request::ImportBundle {
+            zip_base64: ipc::encode_zip(zip),
+            password: password.map(Secret::new),
+        })
+        .await
+}
+
+/// Export a bundle; returns the offered file name and the zip.
+async fn export(
+    lab: &Lab,
+    bundle_id: &str,
+    include_sign_ins: bool,
+    password: Option<&str>,
+) -> (String, Vec<u8>) {
+    let response = lab
+        .orchestrator
+        .handle(Request::ExportBundle {
+            bundle_id: bundle_id.into(),
+            include_sign_ins,
+            password: password.map(Secret::new),
+        })
+        .await;
+    let Response::Exported {
+        file_name,
+        zip_base64,
+    } = response
+    else {
+        panic!("the export failed: {response:?}");
+    };
+    (file_name, ipc::decode_zip(zip_base64.expose()).unwrap())
+}
+
+#[tokio::test]
+async fn an_export_with_its_sign_in_and_password_imports_into_another_pc() {
+    let other = lab().await;
+    let lab = lab().await;
+    let bundle_id = imported_and_selected(&lab).await;
+    let saved = lab
+        .orchestrator
+        .handle(Request::SetCredentials {
+            bundle_id: bundle_id.clone(),
+            profile_ids: Vec::new(),
+            username: "lab-user".into(),
+            password: Secret::new("lab-pass"),
+        })
+        .await;
+    assert!(matches!(saved, Response::Status { .. }), "{saved:?}");
+    connect(&lab, "wg-a").await;
+    lab.log.take();
+
+    let (file_name, zip) = export(&lab, &bundle_id, true, Some("correct horse")).await;
+    assert_eq!(file_name, "Lab.zip");
+    assert!(lab.log.take().is_empty(), "an export touches no tunnel");
+    let status = lab.orchestrator.report();
+    assert_eq!(status.state, State::Connected);
+    assert_eq!(status.bundle.unwrap().bundle_id, bundle_id);
+
+    assert!(matches!(
+        import_with(&other, &zip, None).await,
+        Response::PasswordNeeded { wrong: false }
+    ));
+    assert!(matches!(
+        import_with(&other, &zip, Some("wrong")).await,
+        Response::PasswordNeeded { wrong: true }
+    ));
+    assert!(
+        std::fs::read_dir(other.layout.bundles()).map_or(true, |mut d| d.next().is_none()),
+        "nothing is installed without the password"
+    );
+    let response = import_with(&other, &zip, Some("correct horse")).await;
+    let Response::Imported {
+        bundle,
+        needs_credentials,
+        ..
+    } = response
+    else {
+        panic!("{response:?}");
+    };
+    assert!(needs_credentials.is_empty(), "the sign-in came along");
+    assert!(bundle.profiles.iter().all(|p| p.has_credentials));
+    let manifest = std::fs::read_to_string(
+        other
+            .layout
+            .bundles()
+            .join(&bundle.bundle_id)
+            .join("manifest.json"),
+    )
+    .unwrap();
+    assert!(!manifest.contains("lab-pass"), "{manifest}");
+}
+
+#[tokio::test]
+async fn an_export_without_sign_ins_asks_for_them_again_on_import() {
+    let other = lab().await;
+    let lab = lab().await;
+    let bundle_id = imported_and_selected(&lab).await;
+    lab.orchestrator
+        .handle(Request::SetCredentials {
+            bundle_id: bundle_id.clone(),
+            profile_ids: Vec::new(),
+            username: "lab-user".into(),
+            password: Secret::new("lab-pass"),
+        })
+        .await;
+
+    let (_, zip) = export(&lab, &bundle_id, false, None).await;
+    let Response::Imported {
+        needs_credentials, ..
+    } = import_with(&other, &zip, None).await
+    else {
+        panic!("the import failed");
+    };
+    assert_eq!(needs_credentials, ["ovpn"]);
+}
+
+#[tokio::test]
+async fn exporting_a_bundle_that_is_not_installed_is_refused() {
+    let lab = lab().await;
+    let response = lab
+        .orchestrator
+        .handle(Request::ExportBundle {
+            bundle_id: "0123456789abcdef".into(),
+            include_sign_ins: true,
+            password: None,
+        })
+        .await;
+    assert!(is_error(&response, "not installed"), "{response:?}");
 }

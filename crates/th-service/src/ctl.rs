@@ -54,6 +54,7 @@ pub fn request(arguments: &[String]) -> Result<Option<Request>, String> {
             let bytes = std::fs::read(path).map_err(|e| format!("cannot read {path}: {e}"))?;
             Request::ImportBundle {
                 zip_base64: ipc::encode_zip(&bytes),
+                password: None,
             }
         }
         ["select", id] => Request::SelectBundle {

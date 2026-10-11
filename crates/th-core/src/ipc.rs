@@ -25,7 +25,7 @@ use crate::rotation::State;
 /// Raised whenever a request, response or event is added or changed: a client and a service
 /// from different versions then refuse each other at `Hello` instead of failing later on a
 /// message one of them cannot parse.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 /// Largest line either side accepts: a maximal bundle in base64 plus the envelope.
 pub const MAX_FRAME_BYTES: usize = MAX_ZIP_BYTES / 3 * 4 + 64 * 1024;
 
@@ -37,9 +37,13 @@ pub enum Request {
     },
     Ping,
     GetStatus,
-    /// The zip itself, base64-encoded: the service never opens a path the user chose.
+    /// The zip itself, base64-encoded: the service never opens a path the user chose. A zip
+    /// whose entries are encrypted is answered `PasswordNeeded` until the right `password`
+    /// comes with it.
     ImportBundle {
         zip_base64: String,
+        #[serde(default)]
+        password: Option<Secret>,
     },
     SelectBundle {
         bundle_id: String,
@@ -50,6 +54,14 @@ pub enum Request {
     /// first, and no bundle is active afterwards.
     DeleteBundle {
         bundle_id: String,
+    },
+    /// The installed bundle as a zip an import takes, with its OpenVPN sign-ins in the
+    /// manifest when `include_sign_ins`, and every entry AES-encrypted with `password` when
+    /// given. Answered `Exported`; the bundle and its sign-ins are left as they are.
+    ExportBundle {
+        bundle_id: String,
+        include_sign_ins: bool,
+        password: Option<Secret>,
     },
     /// Add servers to a bundle from config files (SPEC §3.5). The bundle is replaced by a new
     /// one with a new id; answered like an import.
@@ -198,7 +210,21 @@ impl Request {
     /// Check the request's own values; the service still checks them against its state.
     pub fn validate(&self) -> Result<(), IpcError> {
         match self {
-            Request::ImportBundle { zip_base64 } => decode_zip(zip_base64).map(|_| ()),
+            Request::ImportBundle {
+                zip_base64,
+                password,
+            } => {
+                check_zip_password(password.as_ref())?;
+                decode_zip(zip_base64).map(|_| ())
+            }
+            Request::ExportBundle {
+                bundle_id,
+                password,
+                ..
+            } => {
+                check_bundle_id(bundle_id)?;
+                check_zip_password(password.as_ref())
+            }
             Request::SetInterval { minutes } if !(1..=1440).contains(minutes) => Err(
                 IpcError::Invalid("interval must be between 1 and 1440 minutes".into()),
             ),
@@ -291,6 +317,13 @@ fn check_credential(what: &str, value: &str) -> Result<(), IpcError> {
     }
 }
 
+/// A zip's password follows the credentials' rule: it is typed by a person, and bounded.
+fn check_zip_password(password: Option<&Secret>) -> Result<(), IpcError> {
+    password.map_or(Ok(()), |password| {
+        check_credential("password", password.expose())
+    })
+}
+
 /// Decode an `ImportBundle` payload, enforcing the archive size limit.
 pub fn decode_zip(zip_base64: &str) -> Result<Vec<u8>, IpcError> {
     if zip_base64.len() > MAX_ZIP_BYTES / 3 * 4 + 4 {
@@ -323,6 +356,17 @@ pub enum Response {
     },
     ImportFailed {
         errors: Vec<String>,
+    },
+    /// The bundle's entries are encrypted: send it again with the password. `wrong` when the
+    /// one sent did not open it.
+    PasswordNeeded {
+        wrong: bool,
+    },
+    /// An exported bundle, and the file name it is offered under. The zip holds private keys,
+    /// and maybe sign-ins: it is never printed.
+    Exported {
+        file_name: String,
+        zip_base64: Secret,
     },
     /// The installed bundles, ordered by name, and the id of the active one.
     Bundles {

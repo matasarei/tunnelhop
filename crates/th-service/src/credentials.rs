@@ -10,6 +10,7 @@
 //! A profile's own file wins over the bundle default. Ids are validated again before they
 //! become file names, whatever the caller already checked.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -17,7 +18,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use th_core::bundle::{BundleId, ImportedBundle};
 use th_core::ipc::{BundleInfo, ProfileInfo, Secret};
-use th_core::manifest::{Manifest, is_valid_id};
+use th_core::manifest::{Manifest, Protocol, SignIns, is_valid_id};
 use th_core::sanitize::Credentials;
 use thiserror::Error;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
@@ -126,23 +127,57 @@ impl<V: Vault> CredentialStore<V> {
         profile: &str,
     ) -> Result<Option<Credentials>, CredentialError> {
         for scope in [Scope::Profile(profile), Scope::Bundle] {
-            let sealed = match fs::read(self.path(bundle, scope)?) {
-                Ok(sealed) => sealed,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
-                Err(e) => return Err(e.into()),
-            };
-            let plain = self
-                .vault
-                .open(&sealed)
-                .map_err(|e| CredentialError::Corrupt(e.to_string()))?;
-            let mut stored: Stored = serde_json::from_slice(&plain)
-                .map_err(|_| CredentialError::Corrupt("not a credential record".into()))?;
-            return Ok(Some(Credentials {
-                username: std::mem::take(&mut stored.username),
-                password: std::mem::take(&mut stored.password),
-            }));
+            if let Some(credentials) = self.read(bundle, scope)? {
+                return Ok(Some(credentials));
+            }
         }
         Ok(None)
+    }
+
+    /// What one file holds, if it is there.
+    fn read(
+        &self,
+        bundle: &BundleId,
+        scope: Scope<'_>,
+    ) -> Result<Option<Credentials>, CredentialError> {
+        let sealed = match fs::read(self.path(bundle, scope)?) {
+            Ok(sealed) => sealed,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+        let plain = self
+            .vault
+            .open(&sealed)
+            .map_err(|e| CredentialError::Corrupt(e.to_string()))?;
+        let mut stored: Stored = serde_json::from_slice(&plain)
+            .map_err(|_| CredentialError::Corrupt("not a credential record".into()))?;
+        Ok(Some(Credentials {
+            username: std::mem::take(&mut stored.username),
+            password: std::mem::take(&mut stored.password),
+        }))
+    }
+
+    /// A bundle's sign-ins as an export writes them into its manifest: the default, and each
+    /// OpenVPN server's own where it differs from the default.
+    pub fn sign_ins(
+        &self,
+        bundle: &BundleId,
+        manifest: &Manifest,
+    ) -> Result<SignIns, CredentialError> {
+        let default = self.read(bundle, Scope::Bundle)?;
+        let mut profiles = BTreeMap::new();
+        for profile in manifest
+            .profiles
+            .iter()
+            .filter(|p| p.protocol == Protocol::Openvpn)
+        {
+            if let Some(own) = self.read(bundle, Scope::Profile(&profile.id))?
+                && default.as_ref() != Some(&own)
+            {
+                profiles.insert(profile.id.clone(), own);
+            }
+        }
+        Ok(SignIns { default, profiles })
     }
 
     /// Whether `profile` has credentials, without decrypting them.
@@ -178,8 +213,11 @@ impl<V: Vault> CredentialStore<V> {
         Ok(())
     }
 
-    /// Keep the credentials an import took out of the bundle's `auth.txt` files.
+    /// Keep the credentials an import took out of the bundle's `auth.txt` files and manifest.
     pub fn store_imported(&self, imported: &ImportedBundle) -> Result<(), CredentialError> {
+        if let Some(default) = &imported.default_credentials {
+            self.set(&imported.id, Scope::Bundle, default)?;
+        }
         for (profile, credentials) in &imported.credentials {
             self.set(&imported.id, Scope::Profile(profile), credentials)?;
         }
@@ -528,5 +566,57 @@ mod tests {
         assert_eq!(flags, [("wg", true), ("ov1", false), ("ov2", true)]);
         assert_eq!(info.bundle_id, "0123456789abcdef");
         assert_eq!(info.bundle_name, "B");
+    }
+    #[test]
+    fn a_default_sign_in_from_an_import_answers_every_profile() {
+        let (_dir, store) = store();
+        let imported = ImportedBundle {
+            id: bundle(),
+            dir: PathBuf::from("unused"),
+            manifest: manifest(),
+            endpoints: Default::default(),
+            credentials: Default::default(),
+            default_credentials: Some(credentials("everyone", "pw")),
+            needs_credentials: Vec::new(),
+            already_present: false,
+        };
+        store.store_imported(&imported).unwrap();
+        assert!(store.path(&bundle(), Scope::Bundle).unwrap().is_file());
+        assert_eq!(
+            store.get(&bundle(), "ov2").unwrap(),
+            Some(credentials("everyone", "pw"))
+        );
+    }
+
+    #[test]
+    fn sign_ins_for_an_export_hold_the_default_and_only_what_differs_from_it() {
+        let (_dir, store) = store();
+        assert!(store.sign_ins(&bundle(), &manifest()).unwrap().is_empty());
+
+        store
+            .set(&bundle(), Scope::Bundle, &credentials("all", "pw-all"))
+            .unwrap();
+        // As "use for every server" leaves it: the default, and the same on each server.
+        store
+            .set(
+                &bundle(),
+                Scope::Profile("ov1"),
+                &credentials("all", "pw-all"),
+            )
+            .unwrap();
+        store
+            .set(
+                &bundle(),
+                Scope::Profile("ov2"),
+                &credentials("own", "pw-own"),
+            )
+            .unwrap();
+
+        let sign_ins = store.sign_ins(&bundle(), &manifest()).unwrap();
+        assert_eq!(sign_ins.default, Some(credentials("all", "pw-all")));
+        assert_eq!(
+            sign_ins.profiles,
+            [("ov2".to_string(), credentials("own", "pw-own"))].into()
+        );
     }
 }
