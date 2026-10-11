@@ -9,7 +9,8 @@ on:
   push:
     tags: ["v*"]
 
-# Read only, except the one job that creates the release.
+# Read only, except the small job that creates the release: the build, which runs npm and
+# cargo build scripts, never holds a token that can write.
 permissions:
   contents: read
 
@@ -26,14 +27,12 @@ jobs:
     name: installer (Windows)
     runs-on: windows-latest
     timeout-minutes: 45
-    permissions:
-      contents: write
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-        # Nothing here pushes; the release is created with GH_TOKEN below.
+        # Nothing here pushes.
         with:
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -69,15 +68,39 @@ jobs:
             echo "::error::the release build contains the dev safety timer"; exit 1
           fi
 
-      - name: Create the draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Checksum
         working-directory: target/release/bundle/nsis
         run: |
           installer="TunnelHop_${GITHUB_REF_NAME#v}_x64-setup.exe"
           test -f "$installer" || { ls -la; echo "::error::$installer was not built"; exit 1; }
           sha256sum "$installer" > SHA256SUMS.txt
           cat SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" "$installer" SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes \
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: installer
+          path: |
+            target/release/bundle/nsis/TunnelHop_*_x64-setup.exe
+            target/release/bundle/nsis/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    name: draft release
+    needs: installer
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: installer
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "TunnelHop_${GITHUB_REF_NAME#v}_x64-setup.exe" \
+            SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --verify-tag --draft --generate-notes \
             --title "TunnelHop $GITHUB_REF_NAME"
