@@ -4,8 +4,12 @@
 // See: https://v2.tauri.app/start/frontend/sveltekit/ for more info
 import { setLanguage } from "$lib/i18n";
 import { language } from "$lib/ipc";
+import { actLikeAnApp } from "$lib/webview";
 
 export const ssr = false;
+
+// No browser menu or browser shortcuts in the app's window.
+actLikeAnApp();
 
 // The language is settled before the page is drawn, so no text is ever shown in two languages.
 export const load = async () => {
