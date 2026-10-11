@@ -54,11 +54,20 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match the version in every manifest"; exit 1
           fi
 
-      - name: Build the installer
+      - name: Install the frontend's dependencies and build it
         working-directory: app
         run: |
           npm ci
-          npm run installer
+          npm run build
+
+      # A release tags the merge commit GitHub made on main, which no pre-push hook has tested.
+      # The app embeds the built frontend, so this comes after the step above.
+      - name: Tests
+        run: cargo test --workspace
+
+      - name: Build the installer
+        working-directory: app
+        run: npm run installer
 
       # The release gate proves this on every service change; checked again on the very binary
       # that ships.
