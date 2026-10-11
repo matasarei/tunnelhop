@@ -715,6 +715,8 @@ fn entries_encrypted_with_zipcrypto_are_refused_whatever_the_password() {
         writer.write_all(content.as_bytes()).unwrap();
     }
     let weak = writer.finish().unwrap().into_inner();
+    // No password is asked for: none would make it acceptable.
+    assert_eq!(bundle::unlock(&weak, None), Unlock::Readable);
 
     let (_tmp, root) = store();
     let errors = bundle::import_with(&weak, &root, Some("pw")).unwrap_err();

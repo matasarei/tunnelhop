@@ -144,13 +144,19 @@ pub enum Unlock {
     WrongPassword,
 }
 
-/// Try `password` on the archive's first encrypted entry.
+/// Try `password` on the archive's first encrypted entry. Entries encrypted with ZipCrypto
+/// count as readable: the import refuses them whatever the password, so asking for one first
+/// would only delay that.
 pub fn unlock(zip_bytes: &[u8], password: Option<&str>) -> Unlock {
     let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(zip_bytes)) else {
         return Unlock::Readable;
     };
-    let encrypted = (0..archive.len().min(MAX_ENTRIES))
-        .find(|&i| archive.by_index_raw(i).is_ok_and(|entry| entry.encrypted()));
+    let encrypted = (0..archive.len().min(MAX_ENTRIES)).find(|&i| {
+        archive.by_index_raw(i).is_ok_and(|entry| entry.encrypted())
+            && archive
+                .get_aes_verification_key_and_salt(i)
+                .is_ok_and(|aes| aes.is_some())
+    });
     let (Some(index), Some(password)) = (encrypted, password) else {
         return if encrypted.is_some() {
             Unlock::NeedsPassword
