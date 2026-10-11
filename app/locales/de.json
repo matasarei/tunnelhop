@@ -152,7 +152,7 @@
   "signin.stored": "Wird vom TunnelHop-Dienst gespeichert, verschlüsselt für diesen PC. Die App behält keine Kopie.",
   "signin.asks": "Dieser Server verlangt Benutzername und Passwort.",
   "signin.refused": "Der Server hat den gespeicherten Benutzernamen und das Passwort abgelehnt. Geben Sie sie erneut ein.",
-  "signin.provider_hint": "Manche Anbieter vergeben für OpenVPN einen eigenen Benutzernamen und ein eigenes Passwort in den Kontoeinstellungen (so auch Proton VPN); die Anmeldedaten des Kontos selbst werden abgelehnt.",
+  "signin.provider_hint": "Geben Sie den OpenVPN-Benutzernamen und das OpenVPN-Passwort Ihres VPN-Anbieters ein, nicht die Anmeldedaten Ihres Kontos dort. Proton VPN zeigt sie zum Beispiel unter Account → OpenVPN / IKEv2 username.",
   "signin.everywhere": "Für alle OpenVPN-Server in diesem Paket verwenden",
 
   "runtime.missing": "{name} ist nicht installiert",

@@ -94,13 +94,14 @@
       {#if profile}
         {#if refused}
           <p><strong>{t("signin.refused")}</strong></p>
-          <p>{t("signin.provider_hint")}</p>
         {:else}
           <p>{shared ? t("signin.asks") : t("signin.one_server")}</p>
         {/if}
       {:else}
         <p>{tn("signin.needed", waiting.length)}</p>
       {/if}
+      <!-- The account's own sign-in is the obvious guess, and the wrong one. -->
+      <p>{t("signin.provider_hint")}</p>
       <fluent-text-input
         value={username}
         oninput={(e: Event) => (username = value(e))}

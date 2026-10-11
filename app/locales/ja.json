@@ -144,7 +144,7 @@
   "signin.stored": "TunnelHop サービスが、この PC 用に暗号化して保存します。アプリはコピーを保持しません。",
   "signin.asks": "このサーバーではユーザー名とパスワードが必要です。",
   "signin.refused": "サーバーが保存済みのユーザー名とパスワードを拒否しました。もう一度入力してください。",
-  "signin.provider_hint": "プロバイダーによっては、アカウント設定で OpenVPN 専用のユーザー名とパスワードが発行されます (Proton VPN など)。アカウント自体のサインイン情報は拒否されます。",
+  "signin.provider_hint": "VPN プロバイダーのアカウントのサインイン情報ではなく、OpenVPN 用のユーザー名とパスワードを入力してください。たとえば Proton VPN では Account → OpenVPN / IKEv2 username に表示されます。",
   "signin.everywhere": "このバンドルのすべての OpenVPN サーバーに使用する",
 
   "runtime.missing": "{name} がインストールされていません",
