@@ -668,10 +668,26 @@ step (or per closely related pair), opened as a PR against `main`.
     - Note: adding a second server after the interval has passed rotates within the next
       tick, since the interval counts from the connect.
     - Not checked: the tray on screen.
+38. [x] The missing tests, from the follow-up files of earlier steps.
+    - Landed: service tests for a delete whose sign-in or files cannot be removed, an edit
+      while blocked with no tunnel, onto a bundle already installed, and one whose sign-in
+      cannot be carried over, and a runtime found missing, then too old, then usable;
+      `actions.rs` in the app for what the window and the tray send and the stale-status
+      guard; vitest (`npm test`, in the pre-push hook) for the import's switch-or-offer
+      decision, the texts and `runtimeProblem`; live tests `svc_live` (install, crash,
+      uninstall) and the OpenVPN connect timeout; the management password file removed by a
+      drop guard.
+    - Rulings: vitest pinned to 5.0.2, the newest older than two weeks; no end-to-end test
+      for a squatted management port or for `create` failing to make a bundle active (each
+      needs a hook into the service, see TESTING.md §6).
+    - Checked in `th-test` (2026-10-11): `svc_live`, `ovpn_live` (4 tests, 73 s) and
+      `ovpn_mgmt_live` pass. `svc_live` found that `sc.exe` answers in the display language;
+      it reads the service manager instead.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
   (on the PC, and on CI for every PR)
+- `cd app && npm run check && npm test` (the window's types and its own logic)
 - Live tests, in the test VM only: `cargo test -p th-service -- --ignored`, run through
   PowerShell Direct as described in DEVELOPMENT.md
 - The leak procedure in DEVELOPMENT.md: an empty capture apart from VPN endpoints, DHCP and NDP

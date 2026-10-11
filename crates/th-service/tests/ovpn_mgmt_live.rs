@@ -32,6 +32,15 @@ fn ipv4_routes() -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
+/// Removes a file when dropped, so a test that fails half-way leaves no secret behind.
+struct RemoveOnDrop(PathBuf);
+
+impl Drop for RemoveOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 /// A free port on localhost, found by binding and releasing it.
 fn free_port() -> u16 {
     std::net::TcpListener::bind("127.0.0.1:0")
@@ -54,6 +63,7 @@ async fn the_real_openvpn_goes_from_hold_to_connected_and_exits_on_sigterm() {
     let secret = Secret::new("live-test-management-password");
     let password_file = std::env::temp_dir().join("th-ovpn-mgmt-live.pw");
     std::fs::write(&password_file, format!("{}\n", secret.expose())).unwrap();
+    let _password_file = RemoveOnDrop(password_file.clone());
 
     let mut child = tokio::process::Command::new(&openvpn)
         .arg("--config")
@@ -83,7 +93,6 @@ async fn the_real_openvpn_goes_from_hold_to_connected_and_exits_on_sigterm() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     let mut management = management.expect("logged in to the management port");
-    let _ = std::fs::remove_file(&password_file);
 
     management.start().await.expect("state on, hold release");
     let connected = timeout(Duration::from_secs(30), async {

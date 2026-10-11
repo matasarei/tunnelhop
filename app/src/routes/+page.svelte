@@ -15,6 +15,7 @@
   import Servers from "$lib/Servers.svelte";
   import Unlock from "$lib/Unlock.svelte";
   import { disabledAttribute, followSystemTheme } from "$lib/fluent";
+  import { afterInstall } from "$lib/install";
   import { sentences, t, tn } from "$lib/i18n";
   import * as ipc from "$lib/ipc";
   import type { Action, Bundle, BundleList, Profile, Protocol, Report } from "$lib/ipc";
@@ -170,11 +171,9 @@
     notice = outcome.already_present
       ? t("notice.already", { bundle: bundle.bundle_name })
       : tn(how, bundle.profiles.length, { bundle: bundle.bundle_name });
-    if (report?.bundle?.bundle_id !== bundle.bundle_id) {
-      // Switching disconnects the current bundle first: with a tunnel up, that is the user's call.
-      if (report?.state === "disconnected") await run(() => ipc.selectBundle(bundle.bundle_id));
-      else pendingSwitch = bundle;
-    }
+    const next = afterInstall(report, bundle.bundle_id);
+    if (next === "switch") await run(() => ipc.selectBundle(bundle.bundle_id));
+    else if (next === "offer") pendingSwitch = bundle;
     refreshBundles();
     if (outcome.needs_credentials.length > 0) asking = { bundle, profile: null };
   }

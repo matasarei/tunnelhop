@@ -1619,3 +1619,262 @@ async fn with_one_usable_server_rotate_now_is_refused_and_the_report_says_so() {
     );
     assert_eq!(status.profile_id.as_deref(), Some("wg-a"));
 }
+
+/// Hold `path` open with no sharing, as another program might: until the guard is dropped,
+/// Windows refuses to read, write or delete it.
+#[cfg(windows)]
+fn locked(path: &std::path::Path) -> std::fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .unwrap()
+}
+
+/// The username a bundle's profile would connect with, read from the store.
+fn stored_sign_in(lab: &Lab, bundle_id: &str, profile: &str) -> Option<String> {
+    let store = CredentialStore::new(lab.layout.credentials(), XorVault);
+    let id = th_core::bundle::BundleId::parse(bundle_id).unwrap();
+    store.get(&id, profile).unwrap().map(|c| c.username.clone())
+}
+
+async fn sign_in(lab: &Lab, bundle_id: &str, username: &str) {
+    report(
+        lab.orchestrator
+            .handle(Request::SetCredentials {
+                bundle_id: bundle_id.to_string(),
+                profile_ids: Vec::new(),
+                username: username.into(),
+                password: Secret::new("secret"),
+            })
+            .await,
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_bundle_whose_sign_in_cannot_be_removed_is_disconnected_but_kept() {
+    let lab = lab().await;
+    let id = imported_and_selected(&lab).await;
+    sign_in(&lab, &id, "user").await;
+    connect(&lab, "wg-a").await;
+    let guard = locked(&lab.layout.credentials().join(&id).join("bundle.cred"));
+
+    let response = delete(&lab, &id).await;
+
+    assert!(
+        is_error(
+            &response,
+            "credentials could not be removed, so it was not deleted"
+        ),
+        "{response:?}"
+    );
+    let status = lab.orchestrator.report();
+    assert_eq!(
+        status.state,
+        State::Disconnected,
+        "the disconnect came first"
+    );
+    assert!(status.bundle.is_none(), "and left no bundle active");
+    drop(guard);
+    let (bundles, _) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(
+        bundles,
+        [("Lab".to_string(), id.clone())],
+        "still installed"
+    );
+    assert_eq!(stored_sign_in(&lab, &id, "ovpn").as_deref(), Some("user"));
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn a_bundle_whose_files_cannot_be_removed_says_so_after_its_sign_in_is_gone() {
+    let lab = lab().await;
+    let id = imported_and_selected(&lab).await;
+    sign_in(&lab, &id, "user").await;
+    let guard = locked(
+        &lab.layout
+            .bundles()
+            .join(&id)
+            .join("wireguard")
+            .join("a.conf"),
+    );
+
+    let response = delete(&lab, &id).await;
+
+    assert!(
+        is_error(&response, "files could not be removed"),
+        "{response:?}"
+    );
+    assert!(
+        !lab.layout.credentials().join(&id).exists(),
+        "the sign-in goes first, so a half-deleted bundle never keeps a secret"
+    );
+    drop(guard);
+    assert!(
+        listed(delete(&lab, &id).await).0.is_empty(),
+        "a second try finishes it"
+    );
+}
+
+#[tokio::test]
+async fn an_edit_while_blocked_with_no_tunnel_keeps_the_block_and_starts_nothing() {
+    let log = CallLog::default();
+    let driver = Arc::new(MockDriver::new(log.clone()));
+    let lab = lab_with(tempfile::tempdir().unwrap(), false, log, driver.clone()).await;
+    let old = imported_and_selected(&lab).await;
+    connect(&lab, "wg-a").await;
+    driver.fail_connect("wg-a");
+    driver.fail_connect("wg-b");
+    lab.orchestrator.handle(Request::RotateNow).await;
+    let blocked = lab.orchestrator.report();
+    assert_eq!(blocked.state, State::Blocked);
+    assert!(blocked.profile_id.is_none(), "no tunnel is up");
+    lab.log.take();
+
+    let (new, _, _) = edited(add(&lab, &old, "nl.conf", &wireguard("198.51.100.20:51820")).await);
+
+    let log = lab.log.take();
+    assert!(
+        !log.iter()
+            .any(|e| e.starts_with("connect:") || e == "disengage"),
+        "{log:?}"
+    );
+    let status = lab.orchestrator.report();
+    assert_eq!(status.state, State::Blocked);
+    assert!(status.killswitch_engaged);
+    assert_eq!(status.bundle.unwrap().bundle_id, new);
+}
+
+#[tokio::test]
+async fn an_edit_onto_a_bundle_already_installed_keeps_that_bundles_sign_in() {
+    let lab = lab().await;
+    // The edit's result, installed first under its own sign-in.
+    let first = imported_as(&lab, "Lab").await;
+    let (result, _, _) = edited(remove(&lab, &first, &["wg-b"]).await);
+    sign_in(&lab, &result, "result-user").await;
+    // The same original again, with another sign-in, edited the same way.
+    let again = imported_as(&lab, "Lab").await;
+    sign_in(&lab, &again, "original-user").await;
+
+    let (edited_into, _, _) = edited(remove(&lab, &again, &["wg-b"]).await);
+
+    assert_eq!(edited_into, result, "the same edit gives the same bundle");
+    assert_eq!(
+        stored_sign_in(&lab, &result, "ovpn").as_deref(),
+        Some("result-user"),
+        "what the bundle had is left alone"
+    );
+    let (bundles, _) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(
+        bundles,
+        [("Lab".to_string(), result)],
+        "the original is gone"
+    );
+}
+
+#[cfg(windows)]
+#[tokio::test]
+async fn an_edit_whose_sign_in_cannot_be_carried_over_changes_nothing() {
+    let lab = lab().await;
+    let old = imported_as(&lab, "Lab").await;
+    sign_in(&lab, &old, "user").await;
+    let guard = locked(&lab.layout.credentials().join(&old).join("bundle.cred"));
+
+    let response = add(&lab, &old, "nl.conf", &wireguard("198.51.100.20:51820")).await;
+
+    assert!(
+        is_error(
+            &response,
+            "could not be carried over, so nothing was changed"
+        ),
+        "{response:?}"
+    );
+    drop(guard);
+    let (bundles, _) = listed(lab.orchestrator.handle(Request::ListBundles).await);
+    assert_eq!(
+        bundles,
+        [("Lab".to_string(), old.clone())],
+        "the new bundle was undone"
+    );
+    assert_eq!(
+        std::fs::read_dir(lab.layout.credentials()).unwrap().count(),
+        1
+    );
+    assert_eq!(stored_sign_in(&lab, &old, "ovpn").as_deref(), Some("user"));
+}
+
+#[tokio::test]
+async fn a_runtime_found_too_old_is_reported_and_looked_for_until_it_is_usable() {
+    let log = CallLog::default();
+    let missing = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Missing,
+    };
+    let too_old = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::TooOld {
+            found: "0.5.2".into(),
+            required: "0.5.3".into(),
+        },
+    };
+    let available = RuntimeInfo {
+        protocol: Protocol::Wireguard,
+        availability: Availability::Available {
+            version: "1.1.1".into(),
+        },
+    };
+    // What each look finds: nothing, an old WireGuard, then one that will do.
+    let step = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let discover: Discover = {
+        let (step, log) = (step.clone(), log.clone());
+        let (missing, too_old, available) = (missing.clone(), too_old.clone(), available.clone());
+        Arc::new(
+            move |_| match step.load(std::sync::atomic::Ordering::SeqCst) {
+                0 => (missing.clone(), None),
+                1 => (too_old.clone(), None),
+                _ => {
+                    let driver: Arc<dyn VpnDriver> = Arc::new(MockDriver::new(log.clone()));
+                    (available.clone(), Some(driver))
+                }
+            },
+        )
+    };
+    let lab = lab_from(
+        tempfile::tempdir().unwrap(),
+        false,
+        log,
+        vec![missing.clone()],
+        HashMap::new(),
+        Some(discover),
+    )
+    .await;
+    imported_and_selected(&lab).await;
+    let start = Instant::now();
+
+    lab.orchestrator.tick(start).await;
+    assert_eq!(lab.orchestrator.report().runtimes, [missing]);
+
+    // Missing → too old: the report changes, nothing can connect, and the look goes on.
+    step.store(1, std::sync::atomic::Ordering::SeqCst);
+    lab.orchestrator.tick(start + Duration::from_secs(11)).await;
+    assert_eq!(
+        lab.orchestrator.report().runtimes,
+        std::slice::from_ref(&too_old)
+    );
+    let response = lab
+        .orchestrator
+        .handle(Request::Connect { profile_id: None })
+        .await;
+    assert!(matches!(response, Response::Error { .. }), "{response:?}");
+
+    // Too old → available: a driver arrives and connects.
+    step.store(2, std::sync::atomic::Ordering::SeqCst);
+    lab.orchestrator.tick(start + Duration::from_secs(22)).await;
+    assert_eq!(
+        lab.orchestrator.report().runtimes,
+        std::slice::from_ref(&available)
+    );
+    assert_eq!(connect(&lab, "wg-a").await.state, State::Connected);
+}

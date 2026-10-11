@@ -139,8 +139,15 @@ outside the tunnel and 0 samples with the kill-switch off. Last run: 2026-10-10,
 
 ## 6. What has no automated test
 
-- The window's own logic (`app/src`): there is no front-end test runner. It is checked by hand
-  in the VM, by keyboard through `Msvm_Keyboard` (DEVELOPMENT.md §5).
+- The window's components and wiring (`app/src`): `npm test` covers the logic kept in plain
+  modules (`install.ts`, `i18n.ts`, `ipc.ts`), and `actions.rs` what the controls send; the
+  rest is checked by hand in the VM, by keyboard through `Msvm_Keyboard` (DEVELOPMENT.md §5).
 - Anything that needs a mouse in the VM: drag-and-drop of bundles and config files, and closing
   a dialog by clicking outside it.
-- The installer's hooks: checked by the pass in section 3.
+- The installer's hooks: checked by the pass in section 3. The service's own install and
+  uninstall have `svc_live`, but not their error branches (a stop that times out, a start that
+  fails).
+- A management port taken by another process between the driver picking it and OpenVPN
+  binding it: only `port_owner`'s unit test.
+- `create` failing to make a new bundle active: only a disk failure between writing the
+  bundle and reading it back reaches it.
