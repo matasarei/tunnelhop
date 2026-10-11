@@ -11,10 +11,12 @@ use std::io::{Cursor, Write};
 use std::path::Path;
 
 use zip::write::SimpleFileOptions;
-use zip::{CompressionMethod, DateTime, ZipArchive, ZipWriter};
+use zip::{AesMode, CompressionMethod, DateTime, ZipArchive, ZipWriter};
 
 use crate::bundle::{self, BundleId, ImportError, MANIFEST_FILE, MAX_ZIP_BYTES};
-use crate::manifest::{MAX_PROFILES, Manifest, Profile, Protocol, Rotation, SCHEMA_VERSION};
+use crate::manifest::{
+    MAX_PROFILES, Manifest, Profile, Protocol, Rotation, SCHEMA_VERSION, SignIns,
+};
 use crate::tunnel_name::is_dos_device_name;
 
 /// The largest config file an edit may add. Real ones are a few kilobytes.
@@ -96,9 +98,61 @@ pub fn profile_id_from(file_name: &str, is_free: impl Fn(&str) -> bool) -> Strin
 /// Refuses what cannot become a bundle at all (an unknown extension, a profile that is not
 /// there, removing every server); the import then judges the configs themselves.
 pub fn rebuild(root: &Path, id: &BundleId, edit: &Edit) -> Result<Vec<u8>, Vec<ImportError>> {
+    let (mut manifest, mut files) = installed(root, id)?;
+    match edit {
+        Edit::Add(new) => add(&mut manifest, &mut files, new)?,
+        Edit::Remove(ids) => remove(&mut manifest, &mut files, ids)?,
+    }
+    pack(&manifest, files)
+}
+
+/// The zip of the installed bundle `id`, in the format an import takes (SPEC §3.1), for the
+/// user to keep or move to another PC. `sign_ins` go into the manifest when given; with a
+/// `password`, every entry is encrypted with AES-256.
+///
+/// Without either, a bundle made or edited here comes out as the very bytes it was installed
+/// from, so importing it again finds it already there.
+pub fn export(
+    root: &Path,
+    id: &BundleId,
+    sign_ins: Option<SignIns>,
+    password: Option<&str>,
+) -> Result<Vec<u8>, Vec<ImportError>> {
+    let (mut manifest, files) = installed(root, id)?;
+    manifest.credentials = sign_ins.filter(|s| !s.is_empty());
+    pack_with(&manifest, files, password)
+}
+
+/// A file name for an exported bundle: its name, with what Windows does not allow in a file
+/// name replaced.
+pub fn export_file_name(bundle_name: &str) -> String {
+    let cleaned: String = bundle_name
+        .chars()
+        .map(|c| {
+            if c.is_control() || r#"<>:"/\|?*"#.contains(c) {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let cleaned = cleaned.trim().trim_end_matches(['.', ' ']);
+    let stem = if cleaned.is_empty() || is_dos_device_name(cleaned) {
+        "bundle"
+    } else {
+        cleaned
+    };
+    format!("{stem}.zip")
+}
+
+/// A bundle's files other than its manifest, by their path in the bundle.
+type Files = Vec<(String, Vec<u8>)>;
+
+/// The installed manifest and the configs its profiles name, as they are on disk.
+fn installed(root: &Path, id: &BundleId) -> Result<(Manifest, Files), Vec<ImportError>> {
     let dir = root.join(id.as_str());
-    let mut manifest = bundle::read_installed_manifest(&dir)?;
-    let mut files: Vec<(String, Vec<u8>)> = Vec::new();
+    let manifest = bundle::read_installed_manifest(&dir)?;
+    let mut files: Files = Vec::new();
     for profile in &manifest.profiles {
         let content = fs::read(dir.join(&profile.file)).map_err(|e| {
             vec![ImportError::in_file(
@@ -108,13 +162,7 @@ pub fn rebuild(root: &Path, id: &BundleId, edit: &Edit) -> Result<Vec<u8>, Vec<I
         })?;
         files.push((profile.file.clone(), content));
     }
-
-    match edit {
-        Edit::Add(new) => add(&mut manifest, &mut files, new)?,
-        Edit::Remove(ids) => remove(&mut manifest, &mut files, ids)?,
-    }
-
-    pack(&manifest, files)
+    Ok((manifest, files))
 }
 
 /// The zip of a new bundle called `name` ("My servers" when empty) made of these config
@@ -131,6 +179,7 @@ pub fn create(name: &str, new: &[NewProfile]) -> Result<Vec<u8>, Vec<ImportError
         protocols: None,
         rotation: Rotation::default(),
         profiles: Vec::new(),
+        credentials: None,
     };
     let mut files = Vec::new();
     add(&mut manifest, &mut files, new)?;
@@ -141,6 +190,14 @@ pub fn create(name: &str, new: &[NewProfile]) -> Result<Vec<u8>, Vec<ImportError
 /// `.conf` or `.ovpn`), the bundle zip [`create`] makes of them; `None` for anything else, which is
 /// the import's to judge. The files may sit in folders: only their own names are used.
 pub fn from_config_zip(zip_bytes: &[u8]) -> Option<Result<Vec<u8>, Vec<ImportError>>> {
+    from_config_zip_with(zip_bytes, None)
+}
+
+/// [`from_config_zip`] of an archive whose entries may be encrypted with `password`.
+pub fn from_config_zip_with(
+    zip_bytes: &[u8],
+    password: Option<&str>,
+) -> Option<Result<Vec<u8>, Vec<ImportError>>> {
     if zip_bytes.len() > MAX_ZIP_BYTES {
         return None;
     }
@@ -157,7 +214,7 @@ pub fn from_config_zip(zip_bytes: &[u8]) -> Option<Result<Vec<u8>, Vec<ImportErr
         return None;
     }
     Some(
-        bundle::read_entries(zip_bytes, check_config_entry).and_then(|entries| {
+        bundle::read_entries(zip_bytes, check_config_entry, password).and_then(|entries| {
             // In the archive's name order, which a `BTreeMap` already gives.
             let new: Vec<NewProfile> = entries
                 .into_iter()
@@ -186,9 +243,14 @@ fn check_config_entry(name: &str) -> Result<(), &'static str> {
     }
 }
 
-fn pack(
+fn pack(manifest: &Manifest, files: Vec<(String, Vec<u8>)>) -> Result<Vec<u8>, Vec<ImportError>> {
+    pack_with(manifest, files, None)
+}
+
+fn pack_with(
     manifest: &Manifest,
     mut files: Vec<(String, Vec<u8>)>,
+    password: Option<&str>,
 ) -> Result<Vec<u8>, Vec<ImportError>> {
     let mut entries = vec![(
         MANIFEST_FILE.to_string(),
@@ -196,7 +258,7 @@ fn pack(
     )];
     files.sort();
     entries.extend(files);
-    write_zip(&entries).map_err(|e| {
+    write_zip(&entries, password).map_err(|e| {
         vec![ImportError::archive(format!(
             "could not build the bundle: {e}"
         ))]
@@ -302,12 +364,19 @@ fn remove(
 }
 
 /// The entries in the order given, with fixed timestamps and compression: nothing in the
-/// bytes depends on when or where the zip was written.
-fn write_zip(entries: &[(String, Vec<u8>)]) -> zip::result::ZipResult<Vec<u8>> {
-    let options = SimpleFileOptions::default()
+/// bytes depends on when or where the zip was written. Except with a `password`: AES draws a
+/// random salt for every entry.
+fn write_zip(
+    entries: &[(String, Vec<u8>)],
+    password: Option<&str>,
+) -> zip::result::ZipResult<Vec<u8>> {
+    let mut options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
         .last_modified_time(DateTime::default())
         .unix_permissions(0o600);
+    if let Some(password) = password {
+        options = options.with_aes_encryption(AesMode::Aes256, password);
+    }
     let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
     for (name, content) in entries {
         writer.start_file(name, options)?;

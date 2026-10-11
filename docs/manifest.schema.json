@@ -40,9 +40,33 @@
           "file": { "type": "string", "pattern": "^(wireguard|openvpn)/[^/\\\\]+(/[^/\\\\]+)*$" }
         }
       }
+    },
+    "credentials": {
+      "description": "OpenVPN sign-ins, as an export writes them. An import moves them into the service's sealed store.",
+      "type": "object",
+      "additionalProperties": false,
+      "minProperties": 1,
+      "properties": {
+        "default": { "$ref": "#/$defs/sign_in" },
+        "profiles": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[a-z0-9-]{1,40}$" },
+          "additionalProperties": { "$ref": "#/$defs/sign_in" }
+        }
+      }
     }
   },
   "$defs": {
-    "protocol": { "enum": ["wireguard", "openvpn"] }
+    "protocol": { "enum": ["wireguard", "openvpn"] },
+    "sign_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["username", "password"],
+      "properties": {
+        "username": { "$ref": "#/$defs/credential" },
+        "password": { "$ref": "#/$defs/credential" }
+      }
+    },
+    "credential": { "type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[^\\r\\n\\u0000]*$" }
   }
 }

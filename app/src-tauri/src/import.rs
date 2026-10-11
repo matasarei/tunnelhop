@@ -25,6 +25,9 @@ pub enum ImportOutcome {
     Refused { errors: Vec<String> },
     /// The user closed the file picker.
     Cancelled,
+    /// The bundle at `path` is password-protected: ask for the password and import it again.
+    /// `wrong` when the one given did not open it.
+    Locked { path: String, wrong: bool },
 }
 
 /// The file as an `ImportBundle` payload, or why it cannot be one.
@@ -52,6 +55,39 @@ pub fn read_bundle(path: &Path) -> Result<String, String> {
     let bytes = std::fs::read(path)
         .map_err(|e| text("file.cannot_read", &[named[0], ("reason", &e.to_string())]))?;
     Ok(ipc::encode_zip(&bytes))
+}
+
+/// The service's answer to an `ExportBundle`: the file name it offers and the zip.
+pub fn exported(response: Response) -> Result<(String, Vec<u8>), String> {
+    match response {
+        Response::Exported {
+            file_name,
+            zip_base64,
+        } => {
+            let zip = ipc::decode_zip(zip_base64.expose())
+                .map_err(|e| text("client.unexpected", &[("answer", &e.to_string())]))?;
+            Ok((file_name, zip))
+        }
+        Response::Error { message } => Err(message),
+        other => Err(text(
+            "client.unexpected",
+            &[("answer", &format!("{other:?}"))],
+        )),
+    }
+}
+
+/// Write an exported bundle where the user chose, replacing what was there: the save dialog
+/// already asked about that.
+pub fn write_export(path: &Path, zip: &[u8]) -> Result<(), String> {
+    std::fs::write(path, zip).map_err(|e| {
+        text(
+            "file.cannot_write",
+            &[
+                ("name", &path.display().to_string()),
+                ("reason", &e.to_string()),
+            ],
+        )
+    })
 }
 
 /// The service's answer to an `ImportBundle`, as an outcome or an error to show.
@@ -160,5 +196,39 @@ mod tests {
             Err("bundle is larger than 20 MB".into())
         );
         assert!(outcome(Response::Ok).is_err(), "not an answer to an import");
+    }
+    #[test]
+    fn an_exported_bundle_is_written_where_the_user_chose() {
+        let zip = b"PK\x03\x04 the bundle".to_vec();
+        let (file_name, decoded) = exported(Response::Exported {
+            file_name: "Lab.zip".into(),
+            zip_base64: th_core::ipc::Secret::new(ipc::encode_zip(&zip)),
+        })
+        .unwrap();
+        assert_eq!((file_name.as_str(), &decoded), ("Lab.zip", &zip));
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("Lab.zip");
+        std::fs::write(&path, b"older").unwrap();
+        write_export(&path, &decoded).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), zip, "replaced");
+
+        let nowhere = dir.path().join("missing").join("Lab.zip");
+        assert!(
+            write_export(&nowhere, &zip)
+                .unwrap_err()
+                .contains("Lab.zip")
+        );
+    }
+
+    #[test]
+    fn a_refused_export_comes_back_as_its_message() {
+        assert_eq!(
+            exported(Response::Error {
+                message: "bundle 0123456789abcdef is not installed".into()
+            }),
+            Err("bundle 0123456789abcdef is not installed".into())
+        );
+        assert!(exported(Response::Ok).is_err());
     }
 }

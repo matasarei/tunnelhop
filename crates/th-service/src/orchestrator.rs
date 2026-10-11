@@ -16,17 +16,18 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use th_core::bundle::{self, BundleId, ImportedBundle, MAX_BUNDLES};
+use th_core::bundle::{self, BundleId, ImportedBundle, MAX_BUNDLES, Unlock};
 use th_core::driver::{ResolvedEndpoint, ResolvedProfile, TunnelEvent, TunnelHandle, VpnDriver};
 use th_core::edit::{self, Edit, NewProfile};
 use th_core::ipc::{
-    self, Availability, BundleInfo, Event, Request, Response, RuntimeInfo, StatusReport,
+    self, Availability, BundleInfo, Event, Request, Response, RuntimeInfo, Secret, StatusReport,
 };
 use th_core::manifest::Protocol;
 use th_core::rotation::{KillSwitch, Overrides, Probe, Resolver, Rotator, State, Status, Trigger};
 use th_core::sanitize::Endpoint;
 use th_core::tunnel_name::tunnel_name;
 use tokio::sync::{Mutex, broadcast, mpsc};
+use zeroize::Zeroizing;
 
 use crate::credentials::{CredentialStore, Vault, bundle_info};
 use crate::store::{Layout, Settings};
@@ -311,10 +312,21 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         let now = Instant::now();
         match request {
             Request::GetStatus => self.status(),
-            Request::ImportBundle { zip_base64 } => self.import(&inner, &zip_base64).await,
+            Request::ImportBundle {
+                zip_base64,
+                password,
+            } => self.import(&inner, &zip_base64, password.as_ref()).await,
             Request::SelectBundle { bundle_id } => self.select(&mut inner, &bundle_id).await,
             Request::ListBundles => self.list().await,
             Request::DeleteBundle { bundle_id } => self.delete(&mut inner, &bundle_id).await,
+            Request::ExportBundle {
+                bundle_id,
+                include_sign_ins,
+                password,
+            } => {
+                self.export(&bundle_id, include_sign_ins, password.as_ref())
+                    .await
+            }
             Request::AddProfiles { bundle_id, files } => match new_profiles(&files) {
                 Ok(new) => self.edit(&mut inner, &bundle_id, Edit::Add(new), now).await,
                 Err(e) => error(e),
@@ -412,23 +424,38 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         }
     }
 
-    async fn import(&self, inner: &Inner, zip_base64: &str) -> Response {
+    async fn import(&self, inner: &Inner, zip_base64: &str, password: Option<&Secret>) -> Response {
         let bytes = match ipc::decode_zip(zip_base64) {
             Ok(bytes) => bytes,
             Err(e) => return error(e),
         };
-        // A zip of bare config files is not a bundle yet: it becomes one first (SPEC §3.5).
-        let converted = tokio::task::spawn_blocking(move || match edit::from_config_zip(&bytes) {
-            Some(built) => built,
-            None => Ok(bytes),
+        let password = password.map(|p| Zeroizing::new(p.expose().to_string()));
+        let converted = tokio::task::spawn_blocking(move || {
+            let given = password.as_deref().map(String::as_str);
+            match bundle::unlock(&bytes, given) {
+                Unlock::Readable => {}
+                Unlock::NeedsPassword => {
+                    return Err(Box::new(Response::PasswordNeeded { wrong: false }));
+                }
+                Unlock::WrongPassword => {
+                    return Err(Box::new(Response::PasswordNeeded { wrong: true }));
+                }
+            }
+            // A zip of bare config files is not a bundle yet: it becomes one first (SPEC
+            // §3.5), and that one is not encrypted.
+            match edit::from_config_zip_with(&bytes, given) {
+                Some(Ok(built)) => Ok((built, None)),
+                Some(Err(errors)) => Err(Box::new(import_failed(&errors))),
+                None => Ok((bytes, password)),
+            }
         })
         .await;
-        let bytes = match converted {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(errors)) => return import_failed(&errors),
+        let (bytes, password) = match converted {
+            Ok(Ok(converted)) => converted,
+            Ok(Err(answer)) => return *answer,
             Err(e) => return error(format!("the import failed: {e}")),
         };
-        match self.install(bytes).await {
+        match self.install(bytes, password).await {
             Ok(imported) => {
                 self.publish(inner);
                 self.imported(&imported)
@@ -444,7 +471,7 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
             Ok(zip) => zip,
             Err(errors) => return import_failed(&errors),
         };
-        let imported = match self.install(zip).await {
+        let imported = match self.install(zip, None).await {
             Ok(imported) => imported,
             Err(refusal) => return *refusal,
         };
@@ -464,9 +491,13 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         self.imported(&imported)
     }
 
-    /// Install a bundle's zip: the cap, the import and its credentials. `Err` is the answer
-    /// to send when it was refused.
-    async fn install(&self, bytes: Vec<u8>) -> Result<ImportedBundle, Box<Response>> {
+    /// Install a bundle's zip, whose entries `password` opens when they are encrypted: the cap,
+    /// the import and its credentials. `Err` is the answer to send when it was refused.
+    async fn install(
+        &self,
+        bytes: Vec<u8>,
+        password: Option<Zeroizing<String>>,
+    ) -> Result<ImportedBundle, Box<Response>> {
         let root = self.layout.bundles();
         // The same zip again is not another bundle, so it is never what the cap refuses.
         match bundle::installed(&root) {
@@ -485,12 +516,15 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
                 ))));
             }
         }
-        let imported =
-            match tokio::task::spawn_blocking(move || bundle::import(&bytes, &root)).await {
-                Ok(Ok(imported)) => imported,
-                Ok(Err(errors)) => return Err(Box::new(import_failed(&errors))),
-                Err(e) => return Err(Box::new(error(format!("the import failed: {e}")))),
-            };
+        let imported = match tokio::task::spawn_blocking(move || {
+            bundle::import_with(&bytes, &root, password.as_deref().map(String::as_str))
+        })
+        .await
+        {
+            Ok(Ok(imported)) => imported,
+            Ok(Err(errors)) => return Err(Box::new(import_failed(&errors))),
+            Err(e) => return Err(Box::new(error(format!("the import failed: {e}")))),
+        };
         if let Err(e) = self.credentials.store_imported(&imported) {
             return Err(Box::new(error(format!(
                 "the bundle's credentials could not be stored: {e}"
@@ -631,6 +665,81 @@ impl<V: Vault + Send + Sync + 'static> Orchestrator<V> {
         }
         log::info!("deleted bundle {id}");
         self.list().await
+    }
+
+    /// The installed bundle as a zip for the user to keep (SPEC §3.6). Nothing is changed:
+    /// not the bundle, its sign-ins, nor the tunnel.
+    async fn export(
+        &self,
+        bundle_id: &str,
+        include_sign_ins: bool,
+        password: Option<&Secret>,
+    ) -> Response {
+        let Some(id) = BundleId::parse(bundle_id) else {
+            return error("bundle id must be 16 lowercase hex characters");
+        };
+        let root = self.layout.bundles();
+        match bundle::installed(&root) {
+            Ok(installed) if installed.contains(&id) => {}
+            Ok(_) => return error(format!("bundle {id} is not installed")),
+            Err(e) => return error(format!("the installed bundles cannot be read: {e}")),
+        }
+        let bundle = match bundle::open(&root, &id) {
+            Ok(bundle) => bundle,
+            Err(_) => return error(format!("bundle {id} is damaged and cannot be exported")),
+        };
+        let sign_ins = if include_sign_ins {
+            match self.credentials.sign_ins(&id, &bundle.manifest) {
+                Ok(sign_ins) => Some(sign_ins),
+                Err(e) => return error(format!("the saved sign-ins could not be read: {e}")),
+            }
+        } else {
+            None
+        };
+        let protected = password.is_some();
+        let password = password.map(|p| Zeroizing::new(p.expose().to_string()));
+        let source = id.clone();
+        let built = tokio::task::spawn_blocking(move || {
+            edit::export(
+                &root,
+                &source,
+                sign_ins,
+                password.as_deref().map(String::as_str),
+            )
+            .map(Zeroizing::new)
+        })
+        .await;
+        match built {
+            Ok(Ok(zip)) => {
+                log::info!(
+                    "exported bundle {id} ({}){}{}",
+                    bundle.manifest.bundle_name,
+                    if include_sign_ins {
+                        ", with sign-ins"
+                    } else {
+                        ""
+                    },
+                    if protected {
+                        ", password-protected"
+                    } else {
+                        ""
+                    },
+                );
+                Response::Exported {
+                    file_name: edit::export_file_name(&bundle.manifest.bundle_name),
+                    zip_base64: Secret::new(ipc::encode_zip(&zip)),
+                }
+            }
+            Ok(Err(errors)) => error(format!(
+                "the bundle could not be exported: {}",
+                errors
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )),
+            Err(e) => error(format!("the bundle could not be exported: {e}")),
+        }
     }
 
     /// Replace a bundle by a copy with servers added or removed (SPEC §3.5). The copy goes

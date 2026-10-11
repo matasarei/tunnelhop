@@ -58,6 +58,7 @@ fn every_message_round_trips() {
         Request::GetStatus,
         Request::ImportBundle {
             zip_base64: ipc::encode_zip(b"PK\x03\x04"),
+            password: None,
         },
         Request::SelectBundle {
             bundle_id: "0123456789abcdef".into(),
@@ -65,6 +66,15 @@ fn every_message_round_trips() {
         Request::ListBundles,
         Request::DeleteBundle {
             bundle_id: "0123456789abcdef".into(),
+        },
+        Request::ImportBundle {
+            zip_base64: ipc::encode_zip(b"PK\x03\x04"),
+            password: Some(ipc::Secret::new("pw")),
+        },
+        Request::ExportBundle {
+            bundle_id: "0123456789abcdef".into(),
+            include_sign_ins: true,
+            password: Some(ipc::Secret::new("pw")),
         },
         Request::Connect { profile_id: None },
         Request::Connect {
@@ -113,6 +123,11 @@ fn every_message_round_trips() {
         Response::Bundles {
             bundles: Vec::new(),
             active: None,
+        },
+        Response::PasswordNeeded { wrong: true },
+        Response::Exported {
+            file_name: "Ukraine.zip".into(),
+            zip_base64: ipc::Secret::new(ipc::encode_zip(b"PK\x03\x04")),
         },
         Response::Ok,
         Response::Error {
@@ -239,7 +254,8 @@ fn requests_are_validated() {
     );
     assert!(
         Request::ImportBundle {
-            zip_base64: "%%%".into()
+            zip_base64: "%%%".into(),
+            password: None,
         }
         .validate()
         .is_err()
@@ -255,9 +271,12 @@ fn import_payload_is_capped_at_20_mb() {
     );
 
     let over = ipc::encode_zip(&vec![0u8; MAX_ZIP_BYTES + 3]);
-    let error = Request::ImportBundle { zip_base64: over }
-        .validate()
-        .unwrap_err();
+    let error = Request::ImportBundle {
+        zip_base64: over,
+        password: None,
+    }
+    .validate()
+    .unwrap_err();
     assert!(error.to_string().contains("larger than 20 MB"));
 
     // A maximal import still fits in one frame.
@@ -265,6 +284,7 @@ fn import_payload_is_capped_at_20_mb() {
         id: u64::MAX,
         request: Request::ImportBundle {
             zip_base64: ipc::encode_zip(&max),
+            password: None,
         },
     });
     assert!(frame.len() <= MAX_FRAME_BYTES);
@@ -536,6 +556,59 @@ fn a_config_never_appears_in_debug_output() {
     assert!(printed.contains("<redacted>"));
     assert!(
         !printed.contains(&ipc::encode_zip(b"PrivateKey = c2VjcmV0")),
+        "{printed}"
+    );
+}
+
+#[test]
+fn an_import_from_an_older_client_needs_no_password_field() {
+    let request: Request =
+        serde_json::from_value(json!({ "type": "import_bundle", "zip_base64": "UEsDBA==" }))
+            .unwrap();
+    assert_eq!(
+        request,
+        Request::ImportBundle {
+            zip_base64: "UEsDBA==".into(),
+            password: None,
+        }
+    );
+}
+
+#[test]
+fn an_export_names_an_installed_bundle_and_a_usable_password() {
+    let export = |bundle_id: &str, password: Option<&str>| Request::ExportBundle {
+        bundle_id: bundle_id.into(),
+        include_sign_ins: false,
+        password: password.map(ipc::Secret::new),
+    };
+    assert!(export("0123456789abcdef", None).validate().is_ok());
+    assert!(export("0123456789abcdef", Some("pw")).validate().is_ok());
+    assert!(export("../bundles", None).validate().is_err());
+    assert!(export("0123456789abcdef", Some("")).validate().is_err());
+    assert!(export("0123456789abcdef", Some("a\nb")).validate().is_err());
+    let import = Request::ImportBundle {
+        zip_base64: ipc::encode_zip(b"PK"),
+        password: Some(ipc::Secret::new("x".repeat(257))),
+    };
+    assert!(import.validate().is_err());
+}
+
+#[test]
+fn passwords_and_exported_bundles_are_never_printed() {
+    let request = Request::ExportBundle {
+        bundle_id: "0123456789abcdef".into(),
+        include_sign_ins: true,
+        password: Some(ipc::Secret::new("hunter2")),
+    };
+    assert!(!format!("{request:?}").contains("hunter2"));
+    let exported = ipc::encode_zip(b"private key inside");
+    let response = Response::Exported {
+        file_name: "Ukraine.zip".into(),
+        zip_base64: ipc::Secret::new(exported.clone()),
+    };
+    let printed = format!("{response:?}");
+    assert!(
+        printed.contains("Ukraine.zip") && !printed.contains(&exported),
         "{printed}"
     );
 }

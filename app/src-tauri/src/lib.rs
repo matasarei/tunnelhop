@@ -25,7 +25,7 @@ mod app {
     use th_core::ipc::{Event, ProfileFile, Request, Response, Secret, StatusReport};
 
     use crate::bundles::BundleList;
-    use crate::import::{ImportOutcome, outcome, read_bundle};
+    use crate::import::{ImportOutcome, exported, outcome, read_bundle, write_export};
     use crate::lang::text;
     use crate::pipe_client::{Options, ServiceClient, Update};
     use crate::servers::ChosenFile;
@@ -238,9 +238,13 @@ mod app {
 
     /// Import a bundle: the file dropped on the window, or one chosen in the native picker when
     /// no path is given. The file is read here, as the signed-in user, and its bytes go to the
-    /// service.
+    /// service, with the `password` it was protected with when the service asked for one.
     #[tauri::command]
-    async fn import_bundle(app: AppHandle, path: Option<String>) -> Result<ImportOutcome, String> {
+    async fn import_bundle(
+        app: AppHandle,
+        path: Option<String>,
+        password: Option<String>,
+    ) -> Result<ImportOutcome, String> {
         let path = match path {
             Some(path) => std::path::PathBuf::from(path),
             None => {
@@ -259,11 +263,66 @@ mod app {
                 }
             }
         };
+        let shown = path.to_string_lossy().into_owned();
         let zip_base64 = tauri::async_runtime::spawn_blocking(move || read_bundle(&path))
             .await
             .map_err(|e| text("file.read_failed", &[("reason", &e.to_string())]))??;
         let client = app.state::<AppState>().client.clone();
-        outcome(client.request(Request::ImportBundle { zip_base64 }).await?)
+        let response = client
+            .request(Request::ImportBundle {
+                zip_base64,
+                password: password.map(Secret::new),
+            })
+            .await?;
+        match response {
+            // The page asks for the password and imports the same file again with it.
+            Response::PasswordNeeded { wrong } => Ok(ImportOutcome::Locked { path: shown, wrong }),
+            other => outcome(other),
+        }
+    }
+
+    /// Export a bundle to a file the user chooses: `true` once it is written, `false` when the
+    /// save dialog was closed. The service builds the zip; it is written here, as the signed-in
+    /// user, since the service never writes where a user chose.
+    #[tauri::command]
+    async fn export_bundle(
+        app: AppHandle,
+        bundle_id: String,
+        include_sign_ins: bool,
+        password: Option<String>,
+    ) -> Result<bool, String> {
+        let client = app.state::<AppState>().client.clone();
+        let (file_name, zip) = exported(
+            client
+                .request(Request::ExportBundle {
+                    bundle_id,
+                    include_sign_ins,
+                    password: password.map(Secret::new),
+                })
+                .await?,
+        )?;
+        let mut dialog = app.dialog().file();
+        if let Some(window) = app.get_webview_window("main") {
+            dialog = dialog.set_parent(&window);
+        }
+        let chosen = dialog
+            .set_title(text("picker.export.title", &[]))
+            .add_filter(text("picker.bundle.filter", &[]), &["zip"])
+            .set_file_name(&file_name)
+            .blocking_save_file();
+        let Some(path) = chosen.and_then(|file| file.into_path().ok()) else {
+            return Ok(false);
+        };
+        let name = path.display().to_string();
+        tauri::async_runtime::spawn_blocking(move || write_export(&path, &zip))
+            .await
+            .map_err(|e| {
+                text(
+                    "file.cannot_write",
+                    &[("name", &name), ("reason", &e.to_string())],
+                )
+            })??;
+        Ok(true)
     }
 
     /// Make an installed bundle the active one. The service disconnects the old one first.
@@ -465,6 +524,7 @@ mod app {
                 intervals,
                 language,
                 import_bundle,
+                export_bundle,
                 select_bundle,
                 list_bundles,
                 delete_bundle,

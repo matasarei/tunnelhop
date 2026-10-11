@@ -10,8 +10,10 @@
   import Bundles from "$lib/Bundles.svelte";
   import Confirm from "$lib/Confirm.svelte";
   import Credentials from "$lib/Credentials.svelte";
+  import Export from "$lib/Export.svelte";
   import RuntimeHelp from "$lib/RuntimeHelp.svelte";
   import Servers from "$lib/Servers.svelte";
+  import Unlock from "$lib/Unlock.svelte";
   import { followSystemTheme } from "$lib/fluent";
   import { sentences, t, tn } from "$lib/i18n";
   import * as ipc from "$lib/ipc";
@@ -36,6 +38,10 @@
   let pendingSwitch = $state<Bundle | null>(null);
   /** The credentials dialog: for a whole bundle (profile null) or one server. */
   let asking = $state<{ bundle: Bundle; profile: Profile | null; refused?: boolean } | null>(null);
+  /** A protected bundle waiting for its password. */
+  let unlocking = $state<ipc.Locked | null>(null);
+  /** The bundle the export dialog is open for. */
+  let exporting = $state<Bundle | null>(null);
   /** The protocol whose missing or outdated program is being explained. */
   let explaining = $state<Protocol | null>(null);
   let dragging = $state(false);
@@ -125,8 +131,11 @@
 
   const act = (action: Action) => run(() => ipc.act(action));
 
-  /** Import the dropped file, or one from the native picker when no path is given. */
-  async function importFrom(path?: string) {
+  /**
+   * Import the dropped file, or one from the native picker when no path is given; a protected
+   * one again with its `password`.
+   */
+  async function importFrom(path?: string, password?: string) {
     // The button is disabled in both cases; a drop is not, and must not vanish without a word.
     if (!report) {
       error = t("error.import.no_service");
@@ -138,8 +147,12 @@
     }
     importErrors = null;
     notice = null;
-    const outcome = await run(() => ipc.importBundle(path));
+    const outcome = await run(() => ipc.importBundle(path, password));
     if (!outcome || outcome.type === "cancelled") return;
+    if (outcome.type === "locked") {
+      unlocking = outcome;
+      return;
+    }
     if (outcome.type === "refused") {
       refusedWhat = t("refused.import");
       importErrors = outcome.errors;
@@ -282,6 +295,11 @@
       action: t("action.delete"),
       run: () => remove(bundle),
     };
+  }
+
+  function askExport(bundle: Bundle) {
+    notice = null;
+    exporting = bundle;
   }
 
   async function remove(bundle: Bundle) {
@@ -464,7 +482,7 @@
     </div>
   </div>
   {#if bundles && bundles.bundles.length > 0}
-    <Bundles list={bundles} {busy} onswitch={askSwitch} ondelete={askDelete} />
+    <Bundles list={bundles} {busy} onswitch={askSwitch} onexport={askExport} ondelete={askDelete} />
   {:else if listFailed}
     <section class="card empty">{t("bundles.list_failed")}</section>
   {:else if reachable}
@@ -526,6 +544,34 @@
 
 {#if asking}
   <Credentials bundle={asking.bundle} profile={asking.profile} refused={asking.refused} onclose={() => (asking = null)} />
+{/if}
+
+{#if unlocking}
+  {@const locked = unlocking}
+  <Unlock
+    name={locked.path.split(/[\\/]/).pop() ?? locked.path}
+    wrong={locked.wrong}
+    onunlock={(password) => {
+      // Read first: `locked` follows `unlocking`, and is gone once that is cleared.
+      const { path } = locked;
+      unlocking = null;
+      importFrom(path, password);
+    }}
+    oncancel={() => (unlocking = null)}
+  />
+{/if}
+
+{#if exporting}
+  {@const bundle = exporting}
+  <Export
+    {bundle}
+    onclose={(saved) => {
+      // Read first: `bundle` follows `exporting`, and is gone once that is cleared.
+      const name = bundle.bundle_name;
+      exporting = null;
+      if (saved) notice = t("notice.exported", { bundle: name });
+    }}
+  />
 {/if}
 
 {#if unusable}

@@ -203,17 +203,78 @@ fn published_schema_agrees_with_the_fixtures() {
         );
     }
 
+    let signed_in = with_sign_ins(json!({
+        "default": { "username": "u", "password": "p" },
+        "profiles": { "only": { "username": "u2", "password": "p2" } }
+    }));
+    assert!(
+        validator.is_valid(&signed_in),
+        "sign-ins should match the schema"
+    );
+
     let mut unknown = minimal();
     unknown["extra"] = json!(1);
     let mut traversal = minimal();
     traversal["profiles"][0]["file"] = json!("openvpn\\..\\x.ovpn");
     let mut bad_id = minimal();
     bad_id["profiles"][0]["id"] = json!("BAD");
-    for instance in [unknown, traversal, bad_id] {
+    let wrapped = with_sign_ins(json!({ "default": { "username": "u", "password": "p\n" } }));
+    for instance in [unknown, traversal, bad_id, wrapped] {
         assert!(
             !validator.is_valid(&instance),
             "schema should reject {instance}"
         );
         assert!(manifest::parse(&serde_json::to_vec(&instance).unwrap()).is_err());
     }
+}
+
+/// The minimal manifest with a WireGuard profile beside its OpenVPN one, and `credentials`.
+fn with_sign_ins(credentials: Value) -> Value {
+    let mut v = minimal();
+    v["profiles"].as_array_mut().unwrap().push(json!({
+        "id": "wg", "name": "WG", "protocol": "wireguard", "file": "wireguard/wg.conf"
+    }));
+    v["credentials"] = credentials;
+    v
+}
+
+#[test]
+fn sign_ins_name_openvpn_profiles_and_hold_usable_values() {
+    let good = with_sign_ins(json!({
+        "default": { "username": "everyone", "password": "pw" },
+        "profiles": { "only": { "username": "one", "password": "pw2" } }
+    }));
+    let m = manifest::parse(&serde_json::to_vec(&good).unwrap()).unwrap();
+    let sign_ins = m.credentials.unwrap();
+    assert_eq!(sign_ins.default.unwrap().username, "everyone");
+    assert_eq!(sign_ins.profiles["only"].password, "pw2");
+
+    assert_rejected(&with_sign_ins(json!({})), "credentials: must hold");
+    assert_rejected(
+        &with_sign_ins(json!({ "profiles": { "gone": { "username": "u", "password": "p" } } })),
+        "credentials.profiles.gone: no profile has this id",
+    );
+    assert_rejected(
+        &with_sign_ins(json!({ "profiles": { "wg": { "username": "u", "password": "p" } } })),
+        "credentials.profiles.wg: only OpenVPN profiles sign in",
+    );
+    assert_rejected(
+        &with_sign_ins(json!({ "default": { "username": "", "password": "p" } })),
+        "credentials.default.username: must be 1 to 256 characters",
+    );
+    assert_rejected(
+        &with_sign_ins(json!({ "default": { "username": "u", "password": "p\nmore" } })),
+        "credentials.default.password: must not contain line breaks",
+    );
+    assert_rejected(
+        &with_sign_ins(json!({ "default": { "username": "u", "password": "p", "otp": "1" } })),
+        "unknown field",
+    );
+}
+
+#[test]
+fn a_manifest_without_sign_ins_is_written_without_them() {
+    let m = manifest::parse(&fixture("valid-minimal.json")).unwrap();
+    let written = serde_json::to_string(&m).unwrap();
+    assert!(!written.contains("credentials"), "{written}");
 }

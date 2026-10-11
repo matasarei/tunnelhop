@@ -1,5 +1,6 @@
 <script lang="ts">
-  // The installed bundles (SPEC §3.5): which one is in use, switch to another, delete one.
+  // The installed bundles (SPEC §3.5): which one is in use, switch to another, export one,
+  // delete one.
   import { t, tn } from "$lib/i18n";
   import type { Bundle, BundleList } from "$lib/ipc";
 
@@ -7,11 +8,13 @@
     list,
     busy,
     onswitch,
+    onexport,
     ondelete,
   }: {
     list: BundleList;
     busy: boolean;
     onswitch: (bundle: Bundle) => void;
+    onexport: (bundle: Bundle) => void;
     ondelete: (bundle: Bundle) => void;
   } = $props();
 
@@ -38,6 +41,17 @@
             {t("action.switch")}
           </fluent-button>
         {/if}
+        {#if bundle.profiles.length > 0}
+          <fluent-button
+            size="small"
+            appearance="subtle"
+            disabled={busy}
+            aria-label={t("bundles.export_label", { bundle: bundle.bundle_name })}
+            onclick={() => onexport(bundle)}
+          >
+            {t("action.export")}
+          </fluent-button>
+        {/if}
         <fluent-button
           size="small"
           appearance="subtle"
@@ -62,14 +76,17 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 16px;
+    flex-wrap: wrap;
+    gap: 4px 16px;
     min-height: 36px;
     padding: 6px 16px;
   }
   .row + .row {
     border-top: 1px solid var(--colorNeutralStroke2, #e0e0e0);
   }
+  /* The name keeps room to be told apart: in a narrow window the buttons go below it. */
   .who {
+    flex: 1 1 160px;
     min-width: 0;
   }
   .name {
@@ -86,5 +103,6 @@
     align-items: center;
     gap: 8px;
     flex: none;
+    margin-left: auto;
   }
 </style>
