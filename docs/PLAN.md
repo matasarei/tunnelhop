@@ -874,11 +874,15 @@ Implementation rulings worth knowing (full text in the commit bodies):
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
    Defender). Until there is one, builds are unsigned.
-2. **Dependencies under other licences**, all through Tauri and `dirs`: MPL-2.0 (`cssparser`,
-   `cssparser-macros`, `selectors`, `dtoa-short`, `option-ext`), Unicode-3.0 (the `icu_*` and
-   `zerovec` family), CDLA-Permissive-2.0 (one). Whether they ship inside the installer as they
-   are, and which notices it must carry, is the owner's call. A generated third-party notices
-   file (`cargo about`) is the likely answer.
+2. **Third-party notices in the installer.** It carries every crate compiled into
+   `th-service.exe` and `th-app.exe`, and nearly all of their licences (MIT, Apache-2.0, BSD,
+   ISC and the rest) require their copyright and permission notices to ship with the binaries.
+   None do yet. A notices file generated from `Cargo.lock` (`cargo about`) and installed beside
+   the exes covers them all, and is needed before a public release.
+   Separately, the owner's call: whether the dependencies under other licences, all through
+   Tauri and `dirs`, ship as they are. They are MPL-2.0 (`cssparser`, `cssparser-macros`,
+   `selectors`, `dtoa-short`, `option-ext`), Unicode-3.0 (the `icu_*` and `zerovec` family)
+   and CDLA-Permissive-2.0 (one).
 
 ## Progress
 - **2026-10-06:** steps 1–9 merged (PR #1). The Proton allowlist merged (PR #2). Steps 24–25
