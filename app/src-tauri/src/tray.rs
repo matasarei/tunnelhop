@@ -254,6 +254,7 @@ mod tests {
             bundle: None,
             auto_rotate: true,
             interval_minutes: 15,
+            rotatable: false,
             runtimes: Vec::new(),
         }
     }

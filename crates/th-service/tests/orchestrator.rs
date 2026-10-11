@@ -1434,3 +1434,39 @@ async fn a_refused_sign_in_is_reported_as_missing_until_it_is_given_again() {
     assert_eq!(status.state, State::Connected);
     assert_eq!(status.profile_id.as_deref(), Some("ovpn"));
 }
+
+#[tokio::test]
+async fn with_one_usable_server_rotate_now_is_refused_and_the_report_says_so() {
+    let lab = lab().await;
+    assert!(!lab.orchestrator.report().rotatable, "no bundle");
+
+    // wg-a and wg-b can be used; the OpenVPN one has no runtime in this lab.
+    let bundle_id = imported_and_selected(&lab).await;
+    assert!(lab.orchestrator.report().rotatable);
+
+    let (one, ..) = edited(remove(&lab, &bundle_id, &["wg-b"]).await);
+    let status = lab.orchestrator.report();
+    assert_eq!(status.bundle.unwrap().bundle_id, one);
+    assert!(
+        !status.rotatable,
+        "one usable server is nothing to rotate to"
+    );
+
+    connect(&lab, "wg-a").await;
+    lab.log.take();
+    let response = lab.orchestrator.handle(Request::RotateNow).await;
+    assert!(
+        is_error(&response, "no other server to rotate to"),
+        "{response:?}"
+    );
+    assert!(lab.log.take().is_empty(), "nothing may be touched");
+    assert_eq!(lab.orchestrator.report().state, State::Connected);
+
+    // Connect without a profile still works with one server: it is not a rotation.
+    let status = report(
+        lab.orchestrator
+            .handle(Request::Connect { profile_id: None })
+            .await,
+    );
+    assert_eq!(status.profile_id.as_deref(), Some("wg-a"));
+}
