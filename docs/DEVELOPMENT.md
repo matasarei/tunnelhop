@@ -320,8 +320,9 @@ built from the tagged commit and nothing else.
    git switch main; git pull
    git tag -a v0.2.0 -m "TunnelHop 0.2.0"; git push origin v0.2.0
    ```
-4. The workflow checks that the tag matches the three versions, builds the installer, checks
-   the service has no dev safety timer, and creates a **draft** release with
+4. The workflow checks that the tag matches the three versions, runs `cargo test --workspace`,
+   builds the installer, checks the service has no dev safety timer, and creates a **draft**
+   release with
    `TunnelHop_<version>_x64-setup.exe` and `SHA256SUMS.txt`.
 5. Read the draft on GitHub (Releases): edit the notes, and install the attached installer in
    `th-test` if this commit wasn't the one tested in step 1. Then publish it.

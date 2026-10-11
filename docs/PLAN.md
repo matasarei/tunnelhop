@@ -691,8 +691,9 @@ step (or per closely related pair), opened as a PR against `main`.
 39. [x] Release builds from CI: a `v<version>` tag builds the installer on `windows-latest`
     and attaches it, with `SHA256SUMS.txt`, to a draft GitHub Release (`release.yml`).
     - Landed: the tag must match the version in `Cargo.toml`, `tauri.conf.json` and
-      `package.json`; the shipped `th-service.exe` is checked for the dev safety timer;
-      only that job may write. DEVELOPMENT.md, "Cutting a release", has the procedure.
+      `package.json`; the workspace tests run on the tagged commit; the shipped
+      `th-service.exe` is checked for the dev safety timer; only the small job that creates
+      the draft may write. DEVELOPMENT.md, "Cutting a release", has the procedure.
     - Rulings: drafts only, published by a person (the installer is unsigned); Node 24
       through `actions/setup-node`, the version the app is developed and tested with, not
       whatever the runner ships. Code signing is not planned.
