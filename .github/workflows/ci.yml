@@ -3,8 +3,9 @@ name: CI
 # Only what a developer's machine cannot vouch for runs here; the full check (fmt, clippy, every
 # test, the app's type check) runs locally before each push, in .githooks/pre-push. This job
 # proves th-core still builds and passes off Windows (on a Linux runner, the cheapest), so the core
-# stays free of platform code. TunnelHop itself is Windows-only. The release-safety
-# gate is release-gate.yml.
+# stays free of platform code. TunnelHop itself is Windows-only. The second job checks the
+# dependencies against deny.toml, which a new advisory can fail without any change here. The
+# release-safety gate is release-gate.yml.
 
 on:
   push:
@@ -37,3 +38,18 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy -p th-core --all-targets -- -D warnings
       - run: cargo test -p th-core
+
+  # Known vulnerabilities, licences, duplicate crates and crate sources, from deny.toml. Its own
+  # job: the action ships a prebuilt cargo-deny, and a new RustSec advisory fails it on any PR
+  # until it is dealt with (fixed, or listed in deny.toml with the reason it doesn't apply).
+  dependencies:
+    name: dependencies (cargo-deny)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          arguments: --locked

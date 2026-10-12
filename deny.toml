@@ -1,0 +1,48 @@
+# cargo-deny's configuration: known vulnerabilities, licences, duplicate crates and where crates
+# come from. CI runs `cargo deny check` (ci.yml); run it locally the same way.
+
+[graph]
+# Windows is what ships; Linux is where th-core is also tested (ci.yml).
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+
+[advisories]
+# Any RustSec advisory against a crate in Cargo.lock fails the check, unmaintained and unsound
+# ones included. An advisory that doesn't apply to how TunnelHop uses the crate is listed in
+# `ignore` with its id and the reason, never silenced wholesale.
+ignore = [
+    # proc-macro-error is unmaintained. It comes in only on Linux, through Tauri's GTK stack
+    # (gtk → glib-macros), and only as a proc-macro run at compile time: not on Windows, the
+    # only platform TunnelHop ships for. Revisit if a Linux build ever ships.
+    { id = "RUSTSEC-2024-0370", reason = "Linux-only, compile-time, via Tauri's GTK stack; not in the Windows build" },
+]
+
+[licenses]
+# Must equal about.toml's `accepted`: what cargo-deny allows is what THIRD-PARTY-NOTICES.txt
+# can describe. MPL-2.0 and Unicode-3.0 come in through Tauri and `dirs` (decided 2026-10-11).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "0BSD",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "MIT-0",
+    "Unlicense",
+]
+# The workspace's own crates are TunnelHop, under its own licence.
+private = { ignore = true }
+
+[bans]
+# Two versions of one crate are common with Tauri and windows-rs; worth seeing, not failing on.
+multiple-versions = "warn"
+wildcards = "deny"
+# The workspace's crates depend on each other by path alone (they are never published).
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

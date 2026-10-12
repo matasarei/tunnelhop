@@ -22,6 +22,8 @@ unelevated Tauri UI, and an app-owned WFP kill-switch.
   platform-independent th-core job (on a Linux runner) and, when service code changes, the
   Windows release gate. A `v*` tag builds the installer into a draft release (`release.yml`).
 - Core only: `cargo test -p th-core`
+- Dependencies (vulnerabilities, licences, sources; also in CI): `cargo deny --locked check`.
+  Its licence list in `deny.toml` must equal `about.toml`'s.
 - Live tests (`--ignored`) run only inside the `th-test` VM, through PowerShell Direct (DEVELOPMENT.md §5).
 
 ## Hard rules
