@@ -10,7 +10,7 @@ switches between them on a schedule, and blocks all traffic while it switches, s
 leaves the PC outside the tunnel.
 
 <p align="center">
-  <img src="docs/images/window.png" width="452"
+  <img src="docs/images/window.png" width="450"
        alt="The TunnelHop window before any servers are added: the connection status, Add servers and Import bundle, the public IP and kill-switch state, and the rotation settings">
 </p>
 
