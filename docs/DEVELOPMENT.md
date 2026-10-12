@@ -221,6 +221,10 @@ scripts\dev.ps1 stop       # save the VM, stop the servers, quit Docker Desktop
 scripts\dev.ps1 purge      # remove the lab from the PC, keeping the VM's export
 ```
 
+With [just](https://just.systems) installed (`winget install --id Casey.Just -e`), the same
+four are `just status`, `just start`, `just stop` and `just purge` from anywhere in the repo;
+`just` alone lists them. The `justfile` only calls the script, so `just` is optional.
+
 - **`stop`** frees the memory (the VM's 3 to 6 GB, and Docker Desktop's) and deletes nothing.
   Docker Desktop stays up if it runs containers that aren't the test servers.
 - **`start`** creates whatever is missing: the `th-lab` network of section 2, the test

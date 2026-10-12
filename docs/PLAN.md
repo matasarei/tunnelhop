@@ -742,7 +742,8 @@ step (or per closely related pair), opened as a PR against `main`.
       what is missing (the network, the servers' keys, the VM from its export) and starts the
       rest. `purge` removes the VM with its checkpoints, the containers and images, the
       network and `target\`, keeping an export of the `clean` checkpoint; `-All` removes that
-      too. The network's two moments ask for an administrator in a window of their own.
+      too. The network's two moments ask for an administrator in a window of their own. A
+      `justfile` gives the four the short names `just status`, `start`, `stop` and `purge`.
     - Rulings: the VM comes back from an export, not from an unattended Windows install
       (decided with the developer): 22 seconds and 18.6 GB, but this PC only, because of the
       VM's TPM key. The export is written beside the old one and swapped in once complete, and
