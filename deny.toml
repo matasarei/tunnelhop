@@ -1,5 +1,5 @@
 # cargo-deny's configuration: known vulnerabilities, licences, duplicate crates and where crates
-# come from. CI runs `cargo deny check` (ci.yml); run it locally the same way.
+# come from. CI runs `cargo deny --locked check` (ci.yml); run it locally the same way.
 
 [graph]
 # Windows is what ships; Linux is where th-core is also tested (ci.yml).
