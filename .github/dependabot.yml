@@ -8,6 +8,10 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Only releases at least two weeks old, as every pin in this repository has been: a release
+    # that is pulled or found compromised in its first days never reaches a workflow here.
+    cooldown:
+      default-days: 14
     # One pull request for all the actions due that week, not one each.
     groups:
       actions:
