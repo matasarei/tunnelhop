@@ -735,6 +735,23 @@ step (or per closely related pair), opened as a PR against `main`.
       The v0.9.0 release in Program Files, upgraded: the permissions were replaced, the
       service was running, and `ctl status` answered. Not checked: the failure message, as
       no folder in the lab makes `icacls` fail.
+43. [x] The lab in one command: `scripts\dev.ps1` with `status`, `start`, `stop` and `purge`
+    (DEVELOPMENT.md §5), so that a break from the work gives the PC its memory and disk back
+    without the lab having to be built again.
+    - Landed: `stop` saves the VM, stops the servers and quits Docker Desktop. `start` creates
+      what is missing (the network, the servers' keys, the VM from its export) and starts the
+      rest. `purge` removes the VM with its checkpoints, the containers and images, the
+      network and `target\`, keeping an export of the `clean` checkpoint; `-All` removes that
+      too. The network's two moments ask for an administrator in a window of their own.
+    - Rulings: the VM comes back from an export, not from an unattended Windows install
+      (decided with the developer): 22 seconds and 18.6 GB, but this PC only, because of the
+      VM's TPM key. The export is written beside the old one and swapped in once complete, and
+      the VM is removed only after that. `purge` keeps the export unless `-All`, since without
+      it `start` has nothing to import. Docker Desktop is left running when it has other
+      containers. The tools of §1 stay installed.
+    - Checked on the PC: `status`, `stop`, `start` (th-test reached the probe afterwards), the
+      export, and `purge` declined at its question. The export imported as a second VM and
+      came up as `clean` (WireGuard, OpenVPN, no TunnelHop).
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
@@ -964,6 +981,9 @@ Still open:
   README screenshot (PRs #38, #42). v0.9.0 was released, and the repository went public.
 - **2026-10-12:** step 42, the install folder locked to administrators, landed on
   `fix/install-folder-acl` and was checked in `th-test`.
+- **2026-10-12:** step 42 merged (PR #43) and went out as v0.9.1 (PR #44). Step 43, the lab in
+  one command, landed on `feature/dev-env-script`; its `purge` and the `start` after it are
+  still to be run for real.
 - **Next:** the installer and runtime follow-ups: `net stop` failures, runtimes found but
   unusable, late runtimes' leftover tunnels, leftover tunnel services after uninstall, and the
   sign-in after an add. Then the small import ones (macOS leftovers in a zip, long file names,
