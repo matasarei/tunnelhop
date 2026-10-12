@@ -1,0 +1,28 @@
+# cargo-about's configuration, for THIRD-PARTY-NOTICES.txt (scripts/third-party-notices.mjs).
+#
+# Every licence a shipped crate uses must be accepted here, or generation fails and names the
+# crate. The order is a priority: a crate licensed "A OR B" is listed under whichever comes
+# first, so MIT, the shortest text, leads. MPL-2.0, Unicode-3.0 and the rest are accepted
+# because their crates ship with Tauri and `dirs` (decided 2026-10-11).
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-3-Clause",
+    "BSD-2-Clause",
+    "0BSD",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+    "MIT-0",
+    "Unlicense",
+]
+
+# What ships: the Windows build of th-service and th-app, without what only builds or tests it.
+targets = ["x86_64-pc-windows-msvc"]
+ignore-build-dependencies = true
+ignore-dev-dependencies = true
+
+# The workspace's own crates are TunnelHop, not third-party.
+private = { ignore = true }
