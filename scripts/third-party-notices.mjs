@@ -58,6 +58,61 @@ function fail(message) {
 const sysroot = execFileSync("rustc", ["--print", "sysroot"], { cwd: root, encoding: "utf8" }).trim();
 const rustDoc = join(sysroot, "share", "doc", "rust");
 
+/** Words that only a licence's own text contains, to find it among a crate's files. */
+const SIGNATURE = {
+  MIT: "Permission is hereby granted",
+  "BSD-3-Clause": "Redistribution and use",
+  "BSD-2-Clause": "Redistribution and use",
+  ISC: "Permission to use, copy, modify, and/or distribute",
+  Zlib: "This software is provided 'as-is'",
+};
+
+/**
+ * Crates whose package ships no licence file and declares no authors: the copyright line of
+ * their upstream repository's licence. Any other such crate stops generation.
+ */
+const CRATE_UPSTREAM = Object.fromEntries(
+  ["webview2-com", "webview2-com-sys", "webview2-com-macros"].map((name) => [
+    name,
+    {
+      copyright: "Copyright (c) 2021 Bill Avery",
+      source: "https://github.com/wravery/webview2-rs/blob/main/LICENSE",
+    },
+  ]),
+);
+
+/** A licence text that is still the SPDX template, with no one named on the copyright line. */
+const TEMPLATE = /^.*Copyright \(c\) <year> <(owner|copyright holders)>.*$/m;
+
+/**
+ * The text of `id` for one crate whose licence cargo-about only found as the template: the
+ * crate's own file for that licence (cargo-about misses names like `license-mit`), else the
+ * template with the crate's declared authors, else nothing, and generation stops.
+ */
+function ownText(crate, id, template) {
+  const dir = dirname(crate.manifest_path);
+  const signature = SIGNATURE[id];
+  const own = signature
+    ? readdirSync(dir)
+        .filter((f) => /^(licen[cs]e|copying)/i.test(f) && !f.endsWith(".spdx"))
+        .sort()
+        .map((f) => readFileSync(join(dir, f), "utf8"))
+        .find((text) => text.includes(signature) && !TEMPLATE.test(text))
+    : undefined;
+  if (own) return own;
+  const upstream = CRATE_UPSTREAM[crate.name];
+  if (upstream) {
+    return `${template.replace(TEMPLATE, upstream.copyright)}\n(${upstream.source})`;
+  }
+  if (crate.authors.length > 0) {
+    return template.replace(TEMPLATE, `Copyright (c) ${crate.authors.join(", ")}`);
+  }
+  fail(
+    `${crate.name} ${crate.version}: its ${id} licence names no copyright holder, ` +
+      "it ships no such file and declares no authors",
+  );
+}
+
 /** The crates, grouped by licence text, from cargo-about. */
 function crates() {
   let json;
@@ -70,17 +125,30 @@ function crates() {
   } catch (e) {
     fail(`cargo about failed:\n${e.stderr || e.message}`);
   }
-  return JSON.parse(json).licenses.map((licence) => ({
-    title: `${licence.name} (${licence.id})`,
-    id: licence.id,
-    users: licence.used_by
-      .map(({ crate }) => ({
-        line: `${crate.name} ${crate.version}`,
-        url: `https://crates.io/crates/${crate.name}/${crate.version}`,
-      }))
-      .sort((a, b) => a.line.localeCompare(b.line, "en")),
-    text: tidy(licence.text),
-  }));
+  const user = (crate) => ({
+    line: `${crate.name} ${crate.version}`,
+    url: `https://crates.io/crates/${crate.name}/${crate.version}`,
+  });
+  return JSON.parse(json).licenses.flatMap((licence) => {
+    const title = `${licence.name} (${licence.id})`;
+    if (!TEMPLATE.test(licence.text)) {
+      return [
+        {
+          title,
+          id: licence.id,
+          users: licence.used_by.map(({ crate }) => user(crate)).sort((a, b) => a.line.localeCompare(b.line, "en")),
+          text: tidy(licence.text),
+        },
+      ];
+    }
+    // The template names no one, so each crate gets its own block with its own copyright line.
+    return licence.used_by.map(({ crate }) => ({
+      title,
+      id: licence.id,
+      users: [user(crate)],
+      text: tidy(ownText(crate, licence.id, licence.text)),
+    }));
+  });
 }
 
 /** The npm packages bundled into the frontend, each with its own licence text. */
