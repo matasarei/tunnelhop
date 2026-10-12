@@ -9,6 +9,7 @@ pub mod lang;
 pub mod pipe_client;
 pub mod servers;
 pub mod tray;
+pub mod window;
 
 #[cfg(windows)]
 pub use app::{run, show_dashboard};
@@ -48,6 +49,34 @@ mod app {
         /// A `GetStatus` reply that arrives after a status event is older than what is shown,
         /// and is dropped.
         freshness: Freshness,
+    }
+
+    /// Size the dashboard for the screen it opens on, before it is first shown: as tall as its
+    /// view without servers needs, or as tall as fits (`window::fitted_height`), and centred.
+    /// Only at startup: a size the user picks later stays theirs.
+    fn fit_to_screen(app: &AppHandle) {
+        let Some(window) = app.get_webview_window("main") else {
+            return;
+        };
+        let monitor = window
+            .current_monitor()
+            .ok()
+            .flatten()
+            .or_else(|| window.primary_monitor().ok().flatten());
+        let Some(monitor) = monitor else {
+            return;
+        };
+        let scale = monitor.scale_factor();
+        let work_area = f64::from(monitor.work_area().size.height) / scale;
+        let width = window
+            .inner_size()
+            .map(|size| size.to_logical::<f64>(scale).width)
+            .unwrap_or(600.0);
+        let height = crate::window::fitted_height(work_area);
+        if let Err(e) = window.set_size(tauri::LogicalSize::new(width, height)) {
+            log::warn!("could not size the window for the screen: {e}");
+        }
+        let _ = window.center();
     }
 
     /// The dashboard window, shown and brought to the front.
@@ -525,6 +554,7 @@ mod app {
                 tauri::async_runtime::spawn(connection);
 
                 offer_autostart(app.handle());
+                fit_to_screen(app.handle());
                 if !std::env::args().any(|a| a == HIDDEN_ARG) {
                     show_dashboard(app.handle());
                 }
