@@ -76,3 +76,8 @@ at your option.
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion
 in TunnelHop by you, as defined in the Apache-2.0 license, shall be dual licensed as above,
 without any additional terms or conditions.
+
+TunnelHop includes third-party software under its own licences. Their notices are in
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) and, for the Rust standard library,
+[THIRD-PARTY-NOTICES-RUST.html](THIRD-PARTY-NOTICES-RUST.html). The installer puts both next to
+the program.

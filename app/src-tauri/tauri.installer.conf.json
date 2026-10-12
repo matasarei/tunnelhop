@@ -5,7 +5,9 @@
   "bundle": {
     "active": true,
     "resources": {
-      "../../target/release/th-service.exe": "th-service.exe"
+      "../../target/release/th-service.exe": "th-service.exe",
+      "../../THIRD-PARTY-NOTICES.txt": "THIRD-PARTY-NOTICES.txt",
+      "../../THIRD-PARTY-NOTICES-RUST.html": "THIRD-PARTY-NOTICES-RUST.html"
     },
     "windows": {
       "nsis": {

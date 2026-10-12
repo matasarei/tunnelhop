@@ -315,8 +315,14 @@ built from the tagged commit and nothing else.
 2. Set the new version in all three places: `Cargo.toml` (`[workspace.package]`) and
    `app/src-tauri/tauri.conf.json` by hand, and `app/package.json` with
    `npm version <version> --no-git-tag-version` in `app/`, so that `package-lock.json` follows.
-   Run `cargo build` once so that `Cargo.lock` follows too. Merge that change through a pull
-   request like any other.
+   Run `cargo build` once so that `Cargo.lock` follows too. If any dependency or the Rust
+   toolchain changed since the last release, regenerate the third-party notices with
+   `node scripts/third-party-notices.mjs` and commit them too; the release refuses stale ones.
+   `rust-toolchain.toml` names `1.99`, which follows 1.99's point releases, and a new one changes
+   the standard library's notices: a release that fails this check with nothing changed in the
+   repository needs only that regeneration.
+   (It needs cargo-about once: `cargo install cargo-about --locked --version 0.9.2 --features cli`.)
+   Merge that change through a pull request like any other.
 3. Tag the merge commit on `main` and push the tag:
    ```powershell
    git switch main; git pull

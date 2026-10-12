@@ -697,6 +697,16 @@ step (or per closely related pair), opened as a PR against `main`.
     - Rulings: drafts only, published by a person (the installer is unsigned); Node 24
       through `actions/setup-node`, the version the app is developed and tested with, not
       whatever the runner ships. Code signing is not planned.
+40. [x] Third-party notices ship with the installer: `THIRD-PARTY-NOTICES.txt` (every crate in
+    the two exes and every npm package in the window, each with its licence text) and
+    `THIRD-PARTY-NOTICES-RUST.html` (the standard library's), installed beside the exes.
+    - Landed: `scripts/third-party-notices.mjs`, with `cargo about` configured in
+      `about.toml`; both files are committed, and `release.yml` refuses a release when
+      `--check` finds them stale. Checked in `th-test`: installed and uninstalled with the app.
+    - Rulings: MPL-2.0 and Unicode-3.0 crates ship with their notices, MPL-2.0 ones with where
+      their source is (decided with the developer); the std notices are the toolchain's own
+      HTML, copied rather than converted; three npm packages without a licence file get the
+      copyright line of their upstream LICENSE, any other such package stops generation.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
@@ -870,19 +880,13 @@ Implementation rulings worth knowing (full text in the commit bodies):
     configs of its own. It isn't TunnelHop's, and TunnelHop leaves it alone.
 - **Licence (2026-10-11, before going public):** MIT OR Apache-2.0, at the user's option, with
   the Apache-2.0 contribution clause in the README. The repository's history stays as it is.
+- **Third-party licences (2026-10-11):** the MPL-2.0 (`cssparser`, `cssparser-macros`,
+  `selectors`, `dtoa-short`, `option-ext`) and Unicode-3.0 crates that Tauri and `dirs` bring
+  in ship as they are, with their notices (step 40).
 
 Still open:
 1. **A code-signing certificate** for `th-service.exe` and the installer (SmartScreen,
    Defender). Until there is one, builds are unsigned.
-2. **Third-party notices in the installer.** It carries every crate compiled into
-   `th-service.exe` and `th-app.exe`, and nearly all of their licences (MIT, Apache-2.0, BSD,
-   ISC and the rest) require their copyright and permission notices to ship with the binaries.
-   None do yet. A notices file generated from `Cargo.lock` (`cargo about`) and installed beside
-   the exes covers them all, and is needed before a public release.
-   Separately, the owner's call: whether the dependencies under other licences, all through
-   Tauri and `dirs`, ship as they are. They are MPL-2.0 (`cssparser`, `cssparser-macros`,
-   `selectors`, `dtoa-short`, `option-ext`), Unicode-3.0 (the `icu_*` and `zerovec` family)
-   and CDLA-Permissive-2.0 (one).
 
 ## Progress
 - **2026-10-06:** steps 1–9 merged (PR #1). The Proton allowlist merged (PR #2). Steps 24–25

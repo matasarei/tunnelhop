@@ -54,11 +54,20 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME does not match the version in every manifest"; exit 1
           fi
 
-      - name: Install the frontend's dependencies and build it
+      - name: Install the frontend's dependencies
         working-directory: app
+        run: npm ci
+
+      # The installer ships THIRD-PARTY-NOTICES*; they must match this commit's Cargo.lock,
+      # package-lock.json and toolchain. Needs node_modules, for the npm packages' licences.
+      - name: The third-party notices are current
         run: |
-          npm ci
-          npm run build
+          cargo install cargo-about --locked --version 0.9.2 --features cli
+          node scripts/third-party-notices.mjs --check
+
+      - name: Build the frontend
+        working-directory: app
+        run: npm run build
 
       # A release tags the merge commit GitHub made on main, which no pre-push hook has tested.
       # The app embeds the built frontend, so this comes after the step above.
