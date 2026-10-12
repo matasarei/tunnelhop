@@ -716,6 +716,25 @@ step (or per closely related pair), opened as a PR against `main`.
       (?) in the status card's corner; the README screenshot is retaken at the new size.
     - Checked in `th-test` at 1920×1080: en, uk and ru with no scrollbar; the popup by keyboard,
       Copy and Esc; at 1366×768 the window capped and fully on screen.
+42. [x] Only administrators can write to the install folder, whichever one was chosen (SPEC
+    §6). The installer's folder page let an administrator install into, say, `C:\TunnelHop`,
+    where every signed-in user has Modify, and so could replace `th-service.exe`, which runs as
+    LocalSystem (the installer follow-up of step 19, confirmed: the folder page is there).
+    - Landed: `TH_LOCK_INSTDIR` in `hooks.nsh`, run at the end of the pre-install hook, after
+      Tauri has created the folder and before any file is copied. `icacls` makes Administrators
+      the owner, resets everything below to inherited, then replaces the folder's permissions
+      with SYSTEM and Administrators full control, Users and app packages read and execute.
+      Any failure stops the install with a message in all 11 languages.
+    - Rulings: the folder page stays, and the folder is locked instead. Tauri has no switch for
+      the page, and a template of our own would have to follow every Tauri upgrade. Well-known
+      SIDs, because group names are translated. TrustedInstaller loses its entry under Program
+      Files; Windows doesn't service this folder.
+    - Checked in `th-test`. Into `C:\TunnelHop` from `clean`: a standard user was denied both
+      creating a file and replacing `th-service.exe`, which were allowed in a folder made the
+      ordinary way beside it. The upgrade into the same folder and the uninstall were clean.
+      The v0.9.0 release in Program Files, upgraded: the permissions were replaced, the
+      service was running, and `ctl status` answered. Not checked: the failure message, as
+      no folder in the lab makes `icacls` fail.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
@@ -933,5 +952,19 @@ Still open:
   `.conf` files could not be added, which became step 29.
 - **2026-10-10:** step 29, a bundle from loose config files, landed on
   `feature/bundle-from-files` and was checked in `th-test`.
-- **Next:** the rest of the pass on the PC (TESTING.md §3), then the postponed nits
-  (steps 20–23) and the follow-ups in `.tasks/`.
+- **2026-10-10:** step 29 merged (PR #18). Steps 30 and 31 merged (PRs #19, #20), and step
+  32, the app in ten languages (PR #21).
+- **2026-10-11:** steps 33–35 merged (PRs #22–#24): the installer's languages, the refused
+  sign-in, and Russian. Then steps 36 and 37 (PRs #25, #26), two small window fixes (PRs #27,
+  #28), and step 38, the missing tests (PR #29). The audit for going public (2026-10-11)
+  started: the security round, step 23 included (PR #30), step 39's release workflow (PR #31),
+  the user guides and README (PR #32), and the licence (PR #33).
+- **2026-10-12:** step 40, the third-party notices, merged (PR #34), and the rest of the audit
+  (PRs #35, #36, #39, #41). Step 41, the taller window and About, merged (PR #40), with the
+  README screenshot (PRs #38, #42). v0.9.0 was released, and the repository went public.
+- **2026-10-12:** step 42, the install folder locked to administrators, landed on
+  `fix/install-folder-acl` and was checked in `th-test`.
+- **Next:** the installer and runtime follow-ups: `net stop` failures, runtimes found but
+  unusable, late runtimes' leftover tunnels, leftover tunnel services after uninstall, and the
+  sign-in after an add. Then the small import ones (macOS leftovers in a zip, long file names,
+  the picker's wording). Then the postponed nits (steps 20–22).

@@ -22,6 +22,34 @@
   !insertmacro TH_PRINT STOPPING_MAYBE
   nsExec::ExecToLog '"$SYSDIR\net.exe" stop TunnelHop'
   Pop $0
+  !insertmacro TH_LOCK_INSTDIR
+!macroend
+
+; th-service.exe runs as LocalSystem from $INSTDIR, so whoever can write to that folder owns the
+; PC. Under Program Files it is safe, but the folder page lets an administrator choose another
+; one, and a folder made under C:\ gives every signed-in user Modify. So before any file is
+; copied (Tauri's SetOutPath has just created the folder), the folder is made Administrators'
+; and its permissions are replaced: SYSTEM and Administrators full control, Users and app
+; packages read and execute, nothing inherited. Files copied afterwards, and an upgrade's old
+; ones once reset, inherit only that. Should any of it fail, nothing is installed. Well-known
+; SIDs, because the group names are translated.
+!macro TH_LOCK_INSTDIR
+  !insertmacro TH_PRINT SECURING
+  nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /setowner *S-1-5-32-544 /T /C /Q'
+  Pop $0
+  ${If} $0 = 0
+    ; Drops every explicit entry, someone else's included, here and below.
+    nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /reset /T /C /Q'
+    Pop $0
+  ${EndIf}
+  ${If} $0 = 0
+    nsExec::ExecToLog '"$SYSDIR\icacls.exe" "$INSTDIR" /inheritance:r /grant:r *S-1-5-18:(OI)(CI)F *S-1-5-32-544:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX *S-1-15-2-1:(OI)(CI)RX /Q'
+    Pop $0
+  ${EndIf}
+  ${If} $0 != 0
+    !insertmacro TH_ERROR SECURE_FAILED
+    Abort
+  ${EndIf}
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
