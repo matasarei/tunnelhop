@@ -382,7 +382,9 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
 
 ## 5. UI
 
-- **Window:** closing it hides it to the tray.
+- **Window:** closing it hides it to the tray. It opens 600×780 logical pixels, tall enough for
+  the view without servers in every language with no scrollbar; on a screen whose work area is
+  shorter it opens as tall as fits, fully on screen. A size the user picks stays for that run.
 - **Language:** the app's own text (the window, its dialogs, the tray menu, the file pickers
   and its own messages, such as a file it cannot read or a service it cannot reach) is shown
   in the first of the user's Windows display languages the app has: English, Ukrainian,
@@ -412,6 +414,9 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
     window offers this first.
   - Errors from the service (a refused import, a failed connect, a rejected edit) show in the
     window, each with its file and line where there is one.
+  - **About:** a (?) in the status card's corner opens the app's version, licence (MIT or
+    Apache-2.0), where its third-party notices are, and its project, releases and issues pages
+    on GitHub, each address shown to copy, as above.
 - **Tray menu:**
   - Status: `Connected: <profile> (<IP>)`, `Blocked`, or `Disconnected`
   - Rotate Now
