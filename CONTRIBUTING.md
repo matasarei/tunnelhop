@@ -20,7 +20,7 @@ You need Windows 10 or 11 (x64), [rustup](https://rustup.rs) (the toolchain is p
 
 ```powershell
 git config core.hooksPath .githooks   # once per clone: the checks below run before every push
-cd app; npm ci; cd ..
+cd app; npm ci; npm run build; cd ..   # the app embeds the built window, so Rust needs it first
 cargo test --workspace
 ```
 
