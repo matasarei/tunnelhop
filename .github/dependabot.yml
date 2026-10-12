@@ -1,0 +1,14 @@
+# The workflows pin every action to a commit SHA, with its version in a comment. Pins don't
+# move by themselves, so Dependabot proposes the update (SHA and comment together) as a pull
+# request, where CI and a person check it. Crates and npm packages are updated by hand, with
+# the third-party notices regenerated in the same change (CONTRIBUTING.md).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # One pull request for all the actions due that week, not one each.
+    groups:
+      actions:
+        patterns: ["*"]
