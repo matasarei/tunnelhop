@@ -197,5 +197,14 @@
   "help.pick.wireguard": "Choose the Windows installer.",
   "help.pick.openvpn": "Choose the Windows 64-bit MSI installer; its file name starts with OpenVPN-2.",
   "help.defaults": "Keep the default options.",
-  "help.closes": "TunnelHop notices the new program a few seconds after its installer finishes; this message then closes by itself."
+  "help.closes": "TunnelHop notices the new program a few seconds after its installer finishes; this message then closes by itself.",
+  "about.label": "About TunnelHop",
+  "about.title": "About TunnelHop",
+  "about.version": "Version {version}",
+  "about.description": "Rotates your VPN provider's WireGuard and OpenVPN servers on Windows, and blocks all traffic while it switches.",
+  "about.licence": "Free software under the MIT or Apache-2.0 licence, whichever you choose.",
+  "about.notices": "The licences of the third-party software it includes are in THIRD-PARTY-NOTICES.txt, in its installation folder.",
+  "about.project": "Project page",
+  "about.releases": "Updates",
+  "about.issues": "Report a problem"
 }

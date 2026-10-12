@@ -189,5 +189,14 @@
   "help.pick.wireguard": "Windows 用インストーラーを選んでください。",
   "help.pick.openvpn": "Windows 64 ビット用の MSI インストーラーを選んでください。ファイル名は OpenVPN-2 で始まります。",
   "help.defaults": "既定のオプションのままにしてください。",
-  "help.closes": "インストーラーの完了から数秒後に TunnelHop が新しいプログラムを検出し、このメッセージは自動的に閉じます。"
+  "help.closes": "インストーラーの完了から数秒後に TunnelHop が新しいプログラムを検出し、このメッセージは自動的に閉じます。",
+  "about.label": "TunnelHop について",
+  "about.title": "TunnelHop について",
+  "about.version": "バージョン {version}",
+  "about.description": "Windows で VPN プロバイダーの WireGuard と OpenVPN のサーバーを切り替え、切り替え中はすべての通信をブロックします。",
+  "about.licence": "MIT ライセンスまたは Apache-2.0 ライセンス（いずれかを選択）のフリー ソフトウェアです。",
+  "about.notices": "同梱しているサードパーティ製ソフトウェアのライセンスは、インストール フォルダーの THIRD-PARTY-NOTICES.txt にあります。",
+  "about.project": "プロジェクト ページ",
+  "about.releases": "更新",
+  "about.issues": "問題を報告"
 }
