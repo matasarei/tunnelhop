@@ -209,6 +209,46 @@ then needs a second address on that VM for the same reason).
 
 ## 5. Day-to-day workflow
 
+### The lab in one command
+
+Sections 2 to 4 build the lab once. From then on `scripts\dev.ps1` starts it, stops it and
+takes it off the PC:
+
+```powershell
+scripts\dev.ps1 status     # what exists, what runs, and how much disk it takes
+scripts\dev.ps1 start      # network, Docker Desktop, the test servers, the VM
+scripts\dev.ps1 stop       # save the VM, stop the servers, quit Docker Desktop
+scripts\dev.ps1 purge      # remove the lab from the PC, keeping the VM's export
+```
+
+With [just](https://just.systems) installed (`winget install --id Casey.Just -e`), the same
+four are `just status`, `just start`, `just stop` and `just purge` from anywhere in the repo;
+`just` alone lists them. The `justfile` only calls the script, so `just` is optional.
+
+- **`stop`** frees the memory (the VM's 3 to 6 GB, and Docker Desktop's) and deletes nothing.
+  Docker Desktop stays up if it runs containers that aren't the test servers.
+- **`start`** creates whatever is missing: the `th-lab` network of section 2, the test
+  servers' keys on a fresh clone, and, after a purge, the VM from its export, with a new
+  `clean` checkpoint. With everything in place it only starts things.
+- **`purge`** is for a longer break. It asks first, then removes the VM with every checkpoint,
+  the test server containers and their images, the network with its firewall rules, and
+  `target\`. It keeps one thing: an export of the VM's `clean` checkpoint in
+  `C:\Hyper-V\th-test-export` (about 19 GB, against well over 100 GB for a VM with a
+  checkpoint per plan step). That export is what saves installing Windows again, and
+  `purge -All` removes it too. `-ArchivePath` puts it elsewhere, an external drive for one, and
+  is remembered in `%USERPROFILE%\.tunnelhop\dev-env.json`.
+- The network needs an administrator, both to create and to remove, so those two moments
+  raise a Windows prompt; nothing else in the script is elevated.
+- The tools of section 1 (Rust, Node, Docker Desktop, Hyper-V) stay installed. `start` names
+  any that are missing.
+
+What a purge loses is everything in the VM since `clean`, and the test keys' copies in it:
+after the next `start`, run `scripts\vm.ps1 configs test-infra\out` again. The VM has a virtual
+TPM whose key lives on this PC ("Shielded VM Local Certificates" in the machine's certificate
+store), so the export comes back on this PC only.
+
+### A session
+
 The PC builds; `th-test` runs. A session in PowerShell on the PC:
 
 ```powershell
