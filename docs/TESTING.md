@@ -65,6 +65,7 @@ Then check, after each of **install**, **install again over it** (an upgrade) an
 | After | Expect |
 |---|---|
 | Install | `Get-Service TunnelHop` is Running, Automatic, LocalSystem, at `C:\Program Files\TunnelHop\th-service.exe run`; `ctl status` answers |
+| Install into another folder (`/S /D=C:\TunnelHop`, from `clean`) | `icacls C:\TunnelHop` and `icacls C:\TunnelHop\th-service.exe` list only SYSTEM and Administrators with full control and Users and ALL APPLICATION PACKAGES with read and execute, none inherited; `(Get-Acl C:\TunnelHop).Owner` is Administrators; a standard user can neither create a file there nor replace `th-service.exe`; the service runs from it |
 | Upgrade (installer run again while connected) | exit code 0; the service is Running; bundles, the active bundle and `settings.json` are kept; the tunnel is down and the block lifted until you connect again |
 | Uninstall (`uninstall.exe /S`, or Settings → Apps) | `sc query TunnelHop` says the service is not installed; `C:\Program Files\TunnelHop` and `C:\ProgramData\TunnelHop` are gone; no `WireGuardTunnel$th-*` service and no `openvpn.exe`; `netsh wfp show filters` lists nothing named TunnelHop; the Start-menu and desktop shortcuts and the autostart entry are gone; the internet works |
 
@@ -88,7 +89,12 @@ Left after an uninstall, by Tauri's design unless "delete application data" is t
 `%LOCALAPPDATA%\app.tunnelhop` and `%APPDATA%\app.tunnelhop` (the app's log and a marker that
 autostart was already offered). A silent uninstall never ticks it.
 
-**Not checked in that run:** the installer's interactive pages (everything ran with `/S`),
+**2026-10-12, plan step 42:** the "another folder" row, plus the released v0.9.0 in
+Program Files upgraded by the new installer. All as expected. A standard user (in Performance
+Log Users, so that a scheduled task can run as them) could create files and replace the exe in
+a control folder under `C:\`, but neither in the installed one.
+
+**Not checked in the 2026-10-10 run:** the installer's interactive pages (everything ran with `/S`),
 launching the app from the Start menu (it was started by a scheduled task with a limited token,
 DEVELOPMENT.md §5), and an upgrade from an older *version* (the same version was installed over
 itself).

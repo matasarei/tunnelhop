@@ -438,6 +438,11 @@ The user's choices in the tray — auto-rotation on/off and the interval — are
 - **Service crash:** the kill-switch stays (fail closed); the next start reconciles WireGuard
   tunnel services and the OpenVPN job.
 - **Uninstall:** disconnect, disengage, remove the service and `%ProgramData%\TunnelHop`.
+- **Install folder:** the service runs as LocalSystem from it, so only SYSTEM and
+  Administrators may write there, whichever folder the administrator chose. Before any file
+  is copied, the installer makes the folder Administrators' and replaces its permissions:
+  SYSTEM and Administrators full control, Users and app packages read and execute, nothing
+  inherited. If that fails, nothing is installed.
 - **Pipe access** is limited by its security descriptor; every request is validated and size
   limited.
 - **No code from configs is ever executed** (§3.4).
