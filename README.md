@@ -63,6 +63,12 @@ runs.
 - [docs/TESTING.md](docs/TESTING.md): what is tested, and how
 - [docs/PLAN.md](docs/PLAN.md): the development plan and progress
 
+## Contributing and security
+
+Contributions are welcome: [CONTRIBUTING.md](CONTRIBUTING.md) explains how to set up, and the
+rules that keep a kill-switch bug from taking your own PC offline. To report a vulnerability,
+don't open an issue: follow [SECURITY.md](SECURITY.md).
+
 ## Licence
 
 Licensed under either of
