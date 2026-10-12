@@ -189,5 +189,14 @@
   "help.pick.wireguard": "请选择 Windows 安装程序。",
   "help.pick.openvpn": "请选择 Windows 64 位 MSI 安装程序；其文件名以 OpenVPN-2 开头。",
   "help.defaults": "保持默认选项即可。",
-  "help.closes": "安装程序完成后几秒钟，TunnelHop 就会发现新程序；届时此消息会自动关闭。"
+  "help.closes": "安装程序完成后几秒钟，TunnelHop 就会发现新程序；届时此消息会自动关闭。",
+  "about.label": "关于 TunnelHop",
+  "about.title": "关于 TunnelHop",
+  "about.version": "版本 {version}",
+  "about.description": "在 Windows 上轮换你的 VPN 服务商的 WireGuard 和 OpenVPN 服务器，并在切换时阻止所有流量。",
+  "about.licence": "自由软件，可任选 MIT 或 Apache-2.0 许可证。",
+  "about.notices": "其中包含的第三方软件的许可证位于安装文件夹中的 THIRD-PARTY-NOTICES.txt。",
+  "about.project": "项目主页",
+  "about.releases": "更新",
+  "about.issues": "报告问题"
 }

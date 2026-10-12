@@ -213,5 +213,14 @@
   "help.pick.wireguard": "Виберіть інсталятор для Windows.",
   "help.pick.openvpn": "Виберіть 64-розрядний інсталятор MSI для Windows; назва його файлу починається з OpenVPN-2.",
   "help.defaults": "Залиште типові параметри.",
-  "help.closes": "TunnelHop помітить нову програму за кілька секунд після завершення інсталяції; тоді це повідомлення закриється само."
+  "help.closes": "TunnelHop помітить нову програму за кілька секунд після завершення інсталяції; тоді це повідомлення закриється само.",
+  "about.label": "Про TunnelHop",
+  "about.title": "Про TunnelHop",
+  "about.version": "Версія {version}",
+  "about.description": "Змінює сервери WireGuard і OpenVPN вашого VPN-провайдера у Windows і блокує весь трафік, поки перемикається.",
+  "about.licence": "Вільне програмне забезпечення за ліцензією MIT або Apache-2.0, на ваш вибір.",
+  "about.notices": "Ліцензії стороннього програмного забезпечення, що входить до складу TunnelHop, — у файлі THIRD-PARTY-NOTICES.txt у теці встановлення.",
+  "about.project": "Сторінка проєкту",
+  "about.releases": "Оновлення",
+  "about.issues": "Повідомити про проблему"
 }

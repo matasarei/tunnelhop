@@ -12,6 +12,7 @@
   import Credentials from "$lib/Credentials.svelte";
   import Export from "$lib/Export.svelte";
   import RuntimeHelp from "$lib/RuntimeHelp.svelte";
+  import About from "$lib/About.svelte";
   import Servers from "$lib/Servers.svelte";
   import Unlock from "$lib/Unlock.svelte";
   import { disabledAttribute, followSystemTheme } from "$lib/fluent";
@@ -45,6 +46,8 @@
   let exporting = $state<Bundle | null>(null);
   /** The protocol whose missing or outdated program is being explained. */
   let explaining = $state<Protocol | null>(null);
+  /** Whether the About dialog is open. */
+  let about = $state(false);
   let dragging = $state(false);
   /** The installed bundles; null while the service cannot be asked. */
   let bundles = $state<BundleList | null>(null);
@@ -433,6 +436,9 @@
       <div class="title">{title}</div>
       <div class="subtitle">{subtitle}</div>
     </div>
+    <fluent-button class="about" appearance="transparent" size="small" icon-only aria-label={t("about.label")} title={t("about.label")} onclick={() => (about = true)}>
+      <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8" /><path d="M7.6 7.7a2.5 2.5 0 1 1 3.4 2.3c-.6.3-1 .8-1 1.5v.6M10 14.3v.2" /></svg>
+    </fluent-button>
   </section>
 
   <div class="actions">
@@ -573,6 +579,10 @@
   />
 {/if}
 
+{#if about}
+  <About onclose={() => (about = false)} />
+{/if}
+
 {#if unusable}
   <RuntimeHelp protocol={unusable.protocol} availability={unusable.availability} onclose={() => (explaining = null)} />
 {/if}
@@ -636,6 +646,21 @@
     align-items: center;
     gap: 16px;
     padding: 20px;
+  }
+  /* Help sits in the card's corner, out of the way of the status it describes. */
+  .about {
+    margin-left: auto;
+    align-self: flex-start;
+    margin-top: -8px;
+    margin-right: -8px;
+  }
+  .about svg {
+    width: 20px;
+    height: 20px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.5;
+    stroke-linecap: round;
   }
   .badge {
     width: 48px;

@@ -707,6 +707,15 @@ step (or per closely related pair), opened as a PR against `main`.
       their source is (decided with the developer); the std notices are the toolchain's own
       HTML, copied rather than converted; three npm packages without a licence file get the
       copyright line of their upstream LICENSE, any other such package stops generation.
+41. [x] The window opens tall enough for its view, and has an About popup.
+    - Landed: 600×780 (was 680), capped to the monitor's work area before the first show
+      (`window::fitted_height`); a (?) in the status card opens About with the version, the
+      licence, the notices' location and three GitHub addresses to copy; nine keys in all 11
+      locales.
+    - Rulings: addresses copied, not opened (SPEC §5 unchanged in that; no opener plugin); the
+      (?) in the status card's corner; the README screenshot is retaken at the new size.
+    - Checked in `th-test` at 1920×1080: en, uk and ru with no scrollbar; the popup by keyboard,
+      Copy and Esc; at 1366×768 the window capped and fully on screen.
 
 ## How to check it
 - `cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
